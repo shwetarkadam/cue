@@ -1,0 +1,71 @@
+[workspace]
+members = ["crates/cue-core", "crates/cue-cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Rohan"]
+license = "MIT"
+
+[workspace.dependencies]
+# Async
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "fs", "signal", "time"] }
+tokio-stream = "0.1"
+async-trait = "0.1"
+futures = "0.3"
+
+# Audio (fallback, always available)
+cpal = "0.15"
+rubato = "0.15"
+
+# STT
+whisper-rs = { version = "0.12", features = [] }
+
+# LLM
+reqwest = { version = "0.12", features = ["stream", "json", "rustls-tls"], default-features = false }
+eventsource-stream = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Document parsing
+lopdf = "0.33"
+
+# System
+libc = "0.2"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Config
+toml = "0.8"
+dirs = "5"
+dotenvy = "0.15"
+
+# Security
+secrecy = { version = "0.10", features = ["serde"] }
+zeroize = "1"
+
+# Notifications
+notify-rust = "4"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+indicatif = "0.17"
+pin-project-lite = "0.2"

@@ -1,0 +1,35 @@
+[package]
+name = "cue-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "net", "fs", "signal", "time", "io-std"] }
+tokio-stream.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+cpal.workspace = true
+rubato.workspace = true
+whisper-rs.workspace = true
+reqwest.workspace = true
+eventsource-stream.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+toml.workspace = true
+dirs.workspace = true
+dotenvy.workspace = true
+secrecy.workspace = true
+zeroize.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+indicatif.workspace = true
+pin-project-lite.workspace = true
+lopdf.workspace = true
+libc.workspace = true
+notify-rust.workspace = true
