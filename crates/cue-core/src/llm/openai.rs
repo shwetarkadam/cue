@@ -113,6 +113,9 @@ impl LlmProvider for OpenAiProvider {
         let mut bytes_stream = response.bytes_stream();
 
         tokio::spawn(async move {
+            // Buffer partial lines across HTTP chunks — SSE lines don't align with chunk boundaries
+            let mut buf = String::new();
+
             while let Some(chunk_result) = bytes_stream.next().await {
                 match chunk_result {
                     Err(e) => {
@@ -121,31 +124,37 @@ impl LlmProvider for OpenAiProvider {
                     }
                     Ok(chunk) => {
                         let text = match std::str::from_utf8(&chunk) {
-                            Ok(s) => s.to_string(),
+                            Ok(s) => s,
                             Err(_) => continue,
                         };
+                        buf.push_str(text);
 
-                        for line in text.lines() {
-                            if line.starts_with("data: ") {
-                                let json_str = &line["data: ".len()..];
-                                if json_str == "[DONE]" {
-                                    continue;
-                                }
-                                match serde_json::from_str::<StreamChunk>(json_str) {
-                                    Ok(chunk) => {
-                                        for choice in chunk.choices {
-                                            if let Some(content) = choice.delta.content {
-                                                if !content.is_empty()
-                                                    && tx.send(Ok(content)).await.is_err()
-                                                {
-                                                    return;
-                                                }
+                        // Process only complete newline-terminated lines
+                        while let Some(pos) = buf.find('\n') {
+                            let line = buf[..pos].trim_end_matches('\r').to_string();
+                            buf.drain(..=pos);
+
+                            if !line.starts_with("data: ") {
+                                continue;
+                            }
+                            let json_str = line["data: ".len()..].trim();
+                            if json_str == "[DONE]" {
+                                continue;
+                            }
+                            match serde_json::from_str::<StreamChunk>(json_str) {
+                                Ok(sc) => {
+                                    for choice in sc.choices {
+                                        if let Some(content) = choice.delta.content {
+                                            if !content.is_empty()
+                                                && tx.send(Ok(content)).await.is_err()
+                                            {
+                                                return;
                                             }
                                         }
                                     }
-                                    Err(e) => {
-                                        warn!(error = %e, "Failed to parse OpenAI SSE");
-                                    }
+                                }
+                                Err(e) => {
+                                    warn!(error = %e, line = %json_str, "Failed to parse OpenAI SSE");
                                 }
                             }
                         }
