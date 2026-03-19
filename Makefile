@@ -87,7 +87,10 @@ overlay-dev: overlay-install
 	cd apps/overlay && npx tauri dev
 
 overlay-build: overlay-install
-	cd apps/overlay && npx tauri build
+	cd apps/overlay && npx tauri build --bundles deb,rpm
+
+overlay-run:
+	./target/release/cue-overlay &
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
