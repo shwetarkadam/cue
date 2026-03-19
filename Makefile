@@ -84,13 +84,13 @@ overlay-install:
 	cd apps/overlay && npm install
 
 overlay-dev: overlay-install
-	cd apps/overlay && npx tauri dev
+	cd apps/overlay && GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_FORCE_SANDBOX=0 npx tauri dev
 
 overlay-build: overlay-install
-	cd apps/overlay && npx tauri build --bundles deb,rpm
+	cd apps/overlay && GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_FORCE_SANDBOX=0 npx tauri build --bundles deb,rpm
 
 overlay-run:
-	./target/release/cue-overlay &
+	GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_FORCE_SANDBOX=0 ./target/release/cue-overlay
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
