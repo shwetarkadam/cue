@@ -78,6 +78,17 @@ check:
 clean:
 	cargo clean
 
+# ── Overlay (Tauri) ───────────────────────────────────────────────────────────
+
+overlay-install:
+	cd apps/overlay && npm install
+
+overlay-dev: overlay-install
+	cd apps/overlay && npx tauri dev
+
+overlay-build: overlay-install
+	cd apps/overlay && npx tauri build
+
 # ── Help ──────────────────────────────────────────────────────────────────────
 
 help:

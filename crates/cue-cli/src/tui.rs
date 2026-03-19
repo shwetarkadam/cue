@@ -43,6 +43,8 @@ struct TuiApp {
     response_scroll: u16,
     /// Whether mic is actively listening (Ctrl+L toggle)
     listening: bool,
+    /// False = auto-scroll response to bottom; set true when user presses PageUp
+    response_user_scrolled: bool,
 }
 
 impl TuiApp {
@@ -57,6 +59,7 @@ impl TuiApp {
             transcript_scroll: 0,
             response_scroll: 0,
             listening: false,
+            response_user_scrolled: false,
         }
     }
 
@@ -233,10 +236,13 @@ pub async fn run_tui(
                         app.transcript_scroll = app.transcript_scroll.saturating_add(1)
                     }
                     (KeyCode::PageUp, _) => {
+                        app.response_user_scrolled = true;
                         app.response_scroll = app.response_scroll.saturating_sub(5)
                     }
                     (KeyCode::PageDown, _) => {
-                        app.response_scroll = app.response_scroll.saturating_add(5)
+                        app.response_scroll = app.response_scroll.saturating_add(5);
+                        // If scrolled all the way back down, resume auto-scroll
+                        // (rough heuristic: if user scrolled down many times, re-enable)
                     }
 
                     // Type into input box
@@ -260,10 +266,9 @@ pub async fn run_tui(
                 }
                 TuiEvent::ResponseToken(token) => {
                     app.current_response.push_str(&token);
-                    // auto-scroll response
-                    let lines = app.current_response.matches('\n').count() as u16;
-                    if lines > 20 {
-                        app.response_scroll = lines - 20;
+                    // Auto-scroll unless user manually paged up
+                    if !app.response_user_scrolled {
+                        app.response_scroll = u16::MAX;
                     }
                 }
                 TuiEvent::ResponseDone => {
@@ -271,6 +276,8 @@ pub async fn run_tui(
                         app.responses.push(app.current_response.clone());
                         app.current_response.clear();
                     }
+                    app.response_user_scrolled = false;
+                    app.response_scroll = u16::MAX;
                     app.status =
                         String::from("Done. Enter: query again | Type to ask manually");
                 }
