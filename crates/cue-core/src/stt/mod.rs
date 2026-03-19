@@ -75,7 +75,7 @@ impl SttEngine {
             result.push(' ');
         }
 
-        let text = result.trim().to_string();
+        let text = filter_special_tokens(result.trim());
         debug!(segments = num_segments, text_len = text.len(), "Transcription complete");
         Ok(text)
     }
@@ -84,6 +84,53 @@ impl SttEngine {
     pub fn model_path(model_name: &str, models_dir: &Path) -> PathBuf {
         models_dir.join(format!("ggml-{}.bin", model_name))
     }
+}
+
+/// Filter out whisper special tokens like [Bell], [Music], [_BEL_], (Bell) etc.
+/// These appear when whisper hallucinates on silence or background noise.
+fn filter_special_tokens(text: &str) -> String {
+    // Whisper special tokens that indicate noise/silence, not real speech
+    let noise_tokens = [
+        "[Bell]", "[Music]", "[Applause]", "[Laughter]", "[Noise]",
+        "[_BEL_]", "[_TT_]", "[_MUSIC_]", "[_NOISE_]",
+        "(Bell)", "(Music)", "(Applause)", "(Laughter)", "(Noise)",
+        "[silence]", "[BLANK_AUDIO]",
+    ];
+
+    let mut out = text.to_string();
+    for token in &noise_tokens {
+        out = out.replace(token, "");
+    }
+
+    // Also strip anything matching pattern [Xxx] or (Xxx) where Xxx is Title Case (special token)
+    let result = regex_filter_brackets(&out);
+    result.trim().to_string()
+}
+
+fn regex_filter_brackets(text: &str) -> String {
+    // Simple bracket filter without regex dependency:
+    // Remove [Word] and (Word) patterns where content starts with uppercase (whisper special tokens)
+    let mut out = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let open = chars[i];
+        if open == '[' || open == '(' {
+            let close = if open == '[' { ']' } else { ')' };
+            if let Some(end) = chars[i+1..].iter().position(|&c| c == close) {
+                let inner: String = chars[i+1..i+1+end].iter().collect();
+                // Skip if inner starts with uppercase (special token) or is all caps
+                let first = inner.chars().next().unwrap_or(' ');
+                if first.is_uppercase() || inner.chars().all(|c| c.is_uppercase() || c == '_') {
+                    i += end + 2; // skip the whole [Token]
+                    continue;
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 /// Download a whisper model from HuggingFace

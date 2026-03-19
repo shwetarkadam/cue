@@ -357,7 +357,7 @@ impl AudioState {
     ) -> Result<Self> {
         // Use energy threshold based on sensitivity: higher sensitivity = lower threshold
         // sensitivity 0.0 → threshold 0.05, sensitivity 1.0 → threshold 0.001
-        let energy_threshold = 0.05 * (1.0 - vad_sensitivity * 0.95);
+        let energy_threshold = 0.02 + (1.0 - vad_sensitivity) * 0.08;
 
         let vad = VadState::new(
             energy_threshold,
