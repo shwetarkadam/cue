@@ -13,7 +13,10 @@ use cue_core::{
     stt::{DeepgramStreamer, SttEngine},
 };
 use futures::StreamExt;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -53,8 +56,8 @@ pub struct StartArgs {
     #[arg(long)]
     pub daemon: bool,
 
-    /// STT backend: whisper (default) or deepgram
-    #[arg(long, default_value = "whisper")]
+    /// STT backend: deepgram (default) or whisper
+    #[arg(long, default_value = "deepgram")]
     pub stt: String,
 }
 
@@ -224,6 +227,18 @@ pub async fn run(args: StartArgs) -> Result<()> {
     // Channel for transcript entries
     let (transcript_tx, mut transcript_rx) = mpsc::channel::<TranscriptEntry>(32);
 
+    // Listen state: TUI Ctrl+L sends true/false → gates audio forwarding to Deepgram
+    let (listen_tx, mut listen_rx) = mpsc::channel::<bool>(4);
+    let listening = Arc::new(AtomicBool::new(false));
+    {
+        let listening = Arc::clone(&listening);
+        tokio::spawn(async move {
+            while let Some(state) = listen_rx.recv().await {
+                listening.store(state, Ordering::Relaxed);
+            }
+        });
+    }
+
     // ── STT setup ───────────────────────────────────────────────────────────
     if stt_backend == "deepgram" {
         // Deepgram path: check for API key
@@ -243,9 +258,13 @@ pub async fn run(args: StartArgs) -> Result<()> {
         let transcript_tx_dg = transcript_tx.clone();
 
         // Forward utterances from the main audio channel to Deepgram channel
+        // Only forward when Ctrl+L listening is active
+        let listening_dg = Arc::clone(&listening);
         tokio::spawn(async move {
             while let Some(utt) = utterance_rx.recv().await {
-                let _ = dg_utterance_tx.send(utt).await;
+                if listening_dg.load(Ordering::Relaxed) {
+                    let _ = dg_utterance_tx.send(utt).await;
+                }
             }
         });
 
@@ -417,7 +436,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
     // ── TUI task ─────────────────────────────────────────────────────────────
     if let Some(tui_rx) = tui_event_rx {
         let query_tx_tui = query_tx.clone();
-        tokio::spawn(crate::tui::run_tui(tui_rx, query_tx_tui));
+        tokio::spawn(crate::tui::run_tui(tui_rx, query_tx_tui, listen_tx));
     }
 
     // ── Main event loop ──────────────────────────────────────────────────────

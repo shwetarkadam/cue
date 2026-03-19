@@ -130,7 +130,7 @@ fn default_stt_model() -> String { "tiny".to_string() }
 fn default_language() -> String { "en".to_string() }
 fn default_threads() -> u32 { 4 }
 fn default_beam_size() -> u32 { 1 }
-fn default_stt_backend() -> String { "whisper".to_string() }
+fn default_stt_backend() -> String { "deepgram".to_string() }
 fn default_backend() -> String { "cpal".to_string() }
 fn default_auto() -> String { "auto".to_string() }
 fn default_vad_sensitivity() -> f32 { 0.5 }

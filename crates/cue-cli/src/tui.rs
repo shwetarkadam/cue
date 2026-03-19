@@ -41,6 +41,8 @@ struct TuiApp {
     input: String,
     transcript_scroll: u16,
     response_scroll: u16,
+    /// Whether mic is actively listening (Ctrl+L toggle)
+    listening: bool,
 }
 
 impl TuiApp {
@@ -49,13 +51,12 @@ impl TuiApp {
             transcript_lines: Vec::new(),
             responses: Vec::new(),
             current_response: String::new(),
-            status: String::from(
-                "Listening... | Enter: query AI | Type to ask manually | q: quit",
-            ),
+            status: String::from("Press Ctrl+L to start listening | Enter: query AI | q: quit"),
             error: None,
             input: String::new(),
             transcript_scroll: 0,
             response_scroll: 0,
+            listening: false,
         }
     }
 
@@ -89,12 +90,17 @@ impl TuiApp {
             })
             .collect();
 
+        let (transcript_title, transcript_border_color) = if self.listening {
+            (" Transcript  [LISTENING] ", Color::Red)
+        } else {
+            (" Transcript  [Ctrl+L to listen] ", Color::DarkGray)
+        };
         let transcript = Paragraph::new(transcript_lines)
             .block(
                 Block::default()
-                    .title(" Transcript ")
+                    .title(transcript_title)
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray)),
+                    .border_style(Style::default().fg(transcript_border_color)),
             )
             .wrap(Wrap { trim: false })
             .scroll((self.transcript_scroll, 0));
@@ -158,6 +164,7 @@ impl TuiApp {
 pub async fn run_tui(
     mut event_rx: mpsc::Receiver<TuiEvent>,
     query_tx: mpsc::Sender<String>,
+    listen_tx: mpsc::Sender<bool>,
 ) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -180,6 +187,18 @@ pub async fn run_tui(
                 match (key.code, key.modifiers) {
                     // Always quit on Ctrl+C
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => should_quit = true,
+
+                    // Ctrl+L: toggle listening on/off
+                    (KeyCode::Char('l'), KeyModifiers::CONTROL) => {
+                        app.listening = !app.listening;
+                        app.error = None;
+                        if app.listening {
+                            app.status = String::from("LISTENING... speak now | Ctrl+L to stop | Enter: query AI");
+                        } else {
+                            app.status = String::from("Stopped. Press Ctrl+L to listen again | Enter: query AI");
+                        }
+                        let _ = listen_tx.send(app.listening).await;
+                    }
 
                     // Quit on 'q' only when input box is empty
                     (KeyCode::Char('q'), KeyModifiers::NONE) if app.input.is_empty() => {
