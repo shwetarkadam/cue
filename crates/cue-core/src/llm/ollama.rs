@@ -26,6 +26,7 @@ impl OllamaProvider {
 #[derive(Debug, Deserialize)]
 struct OllamaChunk {
     message: Option<OllamaMessage>,
+    #[allow(dead_code)]
     done: bool,
 }
 

@@ -11,7 +11,7 @@ build:
 
 release:
 	cargo build --release
-	strip $(BINARY)
+	@strip $(BINARY) 2>/dev/null || true
 	@echo "Binary: $(BINARY) ($$(du -h $(BINARY) | cut -f1))"
 
 # ── Run ───────────────────────────────────────────────────────────────────────

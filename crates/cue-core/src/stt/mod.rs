@@ -134,7 +134,7 @@ pub async fn download_model(model_name: &str, models_dir: &Path) -> Result<()> {
         None
     };
 
-    let mut bytes = response.bytes().await.context("Failed to read response body")?;
+    let bytes = response.bytes().await.context("Failed to read response body")?;
     if let Some(ref pb) = pb {
         pb.finish_with_message("Download complete");
     }

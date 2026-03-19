@@ -334,7 +334,9 @@ struct AudioState {
     vad: VadState,
     resampler: Option<FftFixedIn<f32>>,
     resample_input_buf: Vec<Vec<f32>>,
+    #[allow(dead_code)]
     resample_output_buf: Vec<Vec<f32>>,
+    #[allow(dead_code)]
     source_sample_rate: u32,
     target_sample_rate: u32,
     /// Chunk size in samples for resampler input
