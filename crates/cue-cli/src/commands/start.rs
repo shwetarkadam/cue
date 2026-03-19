@@ -10,7 +10,7 @@ use cue_core::{
     prompts::get_prompt,
     session::{SessionStore, TranscriptEntry},
     stealth,
-    stt::SttEngine,
+    stt::{DeepgramStreamer, SttEngine},
 };
 use futures::StreamExt;
 use std::sync::Arc;
@@ -52,6 +52,10 @@ pub struct StartArgs {
     /// Run as background daemon; expose Unix socket for `cue ask` to connect to
     #[arg(long)]
     pub daemon: bool,
+
+    /// STT backend: whisper (default) or deepgram
+    #[arg(long, default_value = "whisper")]
+    pub stt: String,
 }
 
 pub async fn run(args: StartArgs) -> Result<()> {
@@ -70,6 +74,13 @@ pub async fn run(args: StartArgs) -> Result<()> {
     if let Some(output_mode) = &args.output {
         config.display.mode = output_mode.clone();
     }
+
+    // Determine effective STT backend: CLI flag > config
+    let stt_backend = if args.stt != "whisper" {
+        args.stt.clone()
+    } else {
+        config.stt.stt_backend.clone()
+    };
 
     // Determine effective output mode: --tui flag overrides --output
     let use_tui = args.tui || config.display.mode == "tui";
@@ -127,8 +138,8 @@ pub async fn run(args: StartArgs) -> Result<()> {
 
     output
         .emit_status(&format!(
-            "Session {} started | Prompt: {} | Trigger: {}",
-            session_id, args.prompt, config.trigger.mode
+            "Session {} started | Prompt: {} | Trigger: {} | STT: {}",
+            session_id, args.prompt, config.trigger.mode, stt_backend
         ))
         .await;
 
@@ -213,75 +224,109 @@ pub async fn run(args: StartArgs) -> Result<()> {
     // Channel for transcript entries
     let (transcript_tx, mut transcript_rx) = mpsc::channel::<TranscriptEntry>(32);
 
-    // Load STT engine (if model exists)
-    let models_dir = Config::models_dir();
-    let model_path =
-        cue_core::stt::SttEngine::model_path(&config.stt.model, &models_dir);
-
-    let stt_engine: Option<Arc<SttEngine>> = if model_path.exists() {
-        match SttEngine::new(&config.stt, &models_dir) {
-            Ok(engine) => {
-                output
-                    .emit_status(&format!("STT loaded: whisper-{}", config.stt.model))
-                    .await;
-                Some(Arc::new(engine))
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to load STT engine");
-                output
-                    .emit_error(&format!(
-                        "STT load failed: {}. Transcription disabled.",
-                        e
-                    ))
-                    .await;
-                None
-            }
+    // ── STT setup ───────────────────────────────────────────────────────────
+    if stt_backend == "deepgram" {
+        // Deepgram path: check for API key
+        let deepgram_key = config.stt.deepgram_api_key.clone().unwrap_or_default();
+        if deepgram_key.is_empty() {
+            output
+                .emit_error(
+                    "DEEPGRAM_API_KEY not set. Set it in your environment or ~/.config/cue/.env",
+                )
+                .await;
+        } else {
+            output.emit_status("STT backend: Deepgram (real-time)").await;
         }
+
+        // Create a dedicated channel for raw audio to Deepgram
+        let (dg_utterance_tx, dg_utterance_rx) = mpsc::channel::<Utterance>(32);
+        let transcript_tx_dg = transcript_tx.clone();
+
+        // Forward utterances from the main audio channel to Deepgram channel
+        tokio::spawn(async move {
+            while let Some(utt) = utterance_rx.recv().await {
+                let _ = dg_utterance_tx.send(utt).await;
+            }
+        });
+
+        // Start Deepgram streamer
+        let streamer = DeepgramStreamer::new(deepgram_key);
+        tokio::spawn(async move {
+            if let Err(e) = streamer.run(dg_utterance_rx, transcript_tx_dg, session_id).await {
+                error!(error = %e, "Deepgram streamer error");
+            }
+        });
     } else {
-        output
-            .emit_error(&format!(
-                "Whisper model not found. Run: cue models download {}",
-                config.stt.model
-            ))
-            .await;
-        None
-    };
+        // Whisper path (default)
+        let models_dir = Config::models_dir();
+        let model_path =
+            cue_core::stt::SttEngine::model_path(&config.stt.model, &models_dir);
 
-    // STT worker: reads utterances, transcribes, sends TranscriptEntry
-    let transcript_tx_clone = transcript_tx.clone();
-    let session_store_stt = Arc::clone(&session_store);
-
-    let _stt_task = tokio::spawn(async move {
-        while let Some(utterance) = utterance_rx.recv().await {
-            if let Some(ref engine) = stt_engine {
-                let engine = Arc::clone(engine);
-                let samples = utterance.samples.clone();
-                let channel = utterance.channel;
-                let tx = transcript_tx_clone.clone();
-                let store = Arc::clone(&session_store_stt);
-
-                tokio::task::spawn_blocking(move || {
-                    match engine.transcribe(&samples) {
-                        Ok(text) if !text.trim().is_empty() => {
-                            let entry = TranscriptEntry {
-                                id: None,
-                                session_id,
-                                channel: channel.to_string(),
-                                text: text.clone(),
-                                spoken_at: chrono::Utc::now(),
-                            };
-                            let _ = store.add_transcript(&entry);
-                            let _ = tx.blocking_send(entry);
-                        }
-                        Ok(_) => {}
-                        Err(e) => {
-                            error!(error = %e, "STT transcription failed");
-                        }
-                    }
-                });
+        let stt_engine: Option<Arc<SttEngine>> = if model_path.exists() {
+            match SttEngine::new(&config.stt, &models_dir) {
+                Ok(engine) => {
+                    output
+                        .emit_status(&format!("STT loaded: whisper-{}", config.stt.model))
+                        .await;
+                    Some(Arc::new(engine))
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to load STT engine");
+                    output
+                        .emit_error(&format!(
+                            "STT load failed: {}. Transcription disabled.",
+                            e
+                        ))
+                        .await;
+                    None
+                }
             }
-        }
-    });
+        } else {
+            output
+                .emit_error(&format!(
+                    "Whisper model not found. Run: cue models download {}",
+                    config.stt.model
+                ))
+                .await;
+            None
+        };
+
+        // STT worker: reads utterances, transcribes, sends TranscriptEntry
+        let transcript_tx_clone = transcript_tx.clone();
+        let session_store_stt = Arc::clone(&session_store);
+
+        tokio::spawn(async move {
+            while let Some(utterance) = utterance_rx.recv().await {
+                if let Some(ref engine) = stt_engine {
+                    let engine = Arc::clone(engine);
+                    let samples = utterance.samples.clone();
+                    let channel = utterance.channel;
+                    let tx = transcript_tx_clone.clone();
+                    let store = Arc::clone(&session_store_stt);
+
+                    tokio::task::spawn_blocking(move || {
+                        match engine.transcribe(&samples) {
+                            Ok(text) if !text.trim().is_empty() => {
+                                let entry = TranscriptEntry {
+                                    id: None,
+                                    session_id,
+                                    channel: channel.to_string(),
+                                    text: text.clone(),
+                                    spoken_at: chrono::Utc::now(),
+                                };
+                                let _ = store.add_transcript(&entry);
+                                let _ = tx.blocking_send(entry);
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                error!(error = %e, "STT transcription failed");
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    }
 
     let trigger_mode = config.trigger.mode.clone();
 
@@ -327,6 +372,9 @@ pub async fn run(args: StartArgs) -> Result<()> {
         });
     }
 
+    // Query channel: receives queries from TUI input box (or stdin)
+    let (query_tx, mut query_rx) = mpsc::channel::<String>(8);
+
     // Shared transcript buffer (for daemon socket access)
     let shared_transcript: Arc<tokio::sync::Mutex<Vec<TranscriptEntry>>> =
         Arc::new(tokio::sync::Mutex::new(Vec::new()));
@@ -352,7 +400,6 @@ pub async fn run(args: StartArgs) -> Result<()> {
     }
 
     // ── SIGUSR1 signal handler ───────────────────────────────────────────────
-    // Sending SIGUSR1 to the process triggers an immediate LLM query of recent transcript.
     let (sigusr1_tx, mut sigusr1_rx) = mpsc::channel::<()>(4);
     {
         let sigusr1_tx = sigusr1_tx.clone();
@@ -369,7 +416,8 @@ pub async fn run(args: StartArgs) -> Result<()> {
 
     // ── TUI task ─────────────────────────────────────────────────────────────
     if let Some(tui_rx) = tui_event_rx {
-        tokio::spawn(crate::tui::run_tui(tui_rx));
+        let query_tx_tui = query_tx.clone();
+        tokio::spawn(crate::tui::run_tui(tui_rx, query_tx_tui));
     }
 
     // ── Main event loop ──────────────────────────────────────────────────────
@@ -443,6 +491,47 @@ pub async fn run(args: StartArgs) -> Result<()> {
                             &config.provider.default,
                         ).await;
                     }
+                }
+            }
+
+            // Query from TUI input box
+            Some(query) = query_rx.recv() => {
+                if query.is_empty() {
+                    // Empty query: use last transcript entry as context
+                    if trigger_mode_main == "manual" || use_tui {
+                        let q = recent_transcript
+                            .last()
+                            .map(|e| e.text.clone())
+                            .unwrap_or_else(|| "What was just discussed?".to_string());
+
+                        trigger_llm(
+                            &q,
+                            &recent_transcript,
+                            &system_prompt,
+                            &context_engine,
+                            &router,
+                            &completion_config,
+                            &*output,
+                            &session_store,
+                            session_id,
+                            &config.provider.model,
+                            &config.provider.default,
+                        ).await;
+                    }
+                } else {
+                    trigger_llm(
+                        &query,
+                        &recent_transcript,
+                        &system_prompt,
+                        &context_engine,
+                        &router,
+                        &completion_config,
+                        &*output,
+                        &session_store,
+                        session_id,
+                        &config.provider.model,
+                        &config.provider.default,
+                    ).await;
                 }
             }
 

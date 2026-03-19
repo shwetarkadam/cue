@@ -40,6 +40,9 @@ run-notify: release models
 run-system-audio: release models
 	$(BINARY) start --system-audio --tui 2>/dev/null
 
+run-deepgram: release models
+	$(BINARY) start --stt deepgram --prompt coding --tui 2>/dev/null
+
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
 models:

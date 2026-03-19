@@ -1,24 +1,26 @@
 //! Full-screen TUI mode using ratatui + crossterm.
 //!
 //! Layout:
-//! ┌─────────────────┬──────────────────────┐
-//! │  Transcript     │  AI Response         │
-//! │  [SYS] ...      │  (streaming tokens)  │
-//! │  [MIC] ...      │                      │
-//! └─────────────────┴──────────────────────┘
-//! │  status bar                            │
-//! └────────────────────────────────────────┘
+//! ┌─ Transcript ──────────────────┐┌─ AI Response ─────────────────┐
+//! │                               ││                               │
+//! │ [MIC] hello world             ││ Here is my response           │
+//! │ [SYS] what is a rate limiter? ││ streaming token by token...   │
+//! │                               ││                               │
+//! └───────────────────────────────┘└───────────────────────────────┘
+//! ┌─ Ask (Enter to send, Esc to clear) ──────────────────────────────┐
+//! │ > _                                                              │
+//! └──────────────────────────────────────────────────────────────────┘
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use cue_core::output::TuiEvent;
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -36,8 +38,9 @@ struct TuiApp {
     current_response: String,
     status: String,
     error: Option<String>,
-    scroll_transcript: u16,
-    scroll_response: u16,
+    input: String,
+    transcript_scroll: u16,
+    response_scroll: u16,
 }
 
 impl TuiApp {
@@ -46,67 +49,39 @@ impl TuiApp {
             transcript_lines: Vec::new(),
             responses: Vec::new(),
             current_response: String::new(),
-            status: String::from("Listening… (q/Ctrl+C to quit | ↑↓ scroll transcript)"),
+            status: String::from(
+                "Listening... | Enter: query AI | Type to ask manually | q: quit",
+            ),
             error: None,
-            scroll_transcript: 0,
-            scroll_response: 0,
-        }
-    }
-
-    fn add_transcript(&mut self, channel: &str, text: &str) {
-        self.transcript_lines
-            .push((channel.to_string(), text.to_string()));
-        // Auto-scroll: keep last ~20 lines visible
-        self.scroll_transcript =
-            (self.transcript_lines.len() as u16).saturating_sub(20);
-    }
-
-    fn add_token(&mut self, token: &str) {
-        self.current_response.push_str(token);
-        // Auto-scroll response panel
-        let line_count = self.current_response.lines().count() as u16;
-        self.scroll_response = line_count.saturating_sub(20);
-    }
-
-    fn finish_response(&mut self) {
-        if !self.current_response.is_empty() {
-            self.responses.push(self.current_response.clone());
-            self.current_response.clear();
+            input: String::new(),
+            transcript_scroll: 0,
+            response_scroll: 0,
         }
     }
 
     fn render(&self, frame: &mut Frame) {
-        let vertical = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(5), Constraint::Length(1)])
+        let vertical = Layout::vertical([Constraint::Min(8), Constraint::Length(3)])
             .split(frame.area());
 
-        let horizontal = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-            .split(vertical[0]);
+        let horizontal = Layout::horizontal([
+            Constraint::Percentage(45),
+            Constraint::Percentage(55),
+        ])
+        .split(vertical[0]);
 
-        self.render_transcript(frame, horizontal[0]);
-        self.render_response(frame, horizontal[1]);
-        self.render_status(frame, vertical[1]);
-    }
-
-    fn render_transcript(&self, frame: &mut Frame, area: Rect) {
-        let lines: Vec<Line> = self
+        // Transcript panel
+        let transcript_lines: Vec<Line> = self
             .transcript_lines
             .iter()
-            .map(|(channel, text)| {
-                let (label, color) = match channel.as_str() {
+            .map(|(ch, text)| {
+                let (label, color) = match ch.as_str() {
                     "system" | "SYS" => ("[SYS]", Color::Cyan),
-                    "mic" | "MIC" => ("[MIC]", Color::Green),
-                    _ => ("[???]", Color::White),
+                    _ => ("[MIC]", Color::Green),
                 };
                 Line::from(vec![
                     Span::styled(
                         label,
-                        Style::default()
-                            .fg(color)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(" "),
                     Span::raw(text.clone()),
@@ -114,66 +89,76 @@ impl TuiApp {
             })
             .collect();
 
-        let block = Block::default()
-            .title(" Transcript ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
-
-        let paragraph = Paragraph::new(lines)
-            .block(block)
+        let transcript = Paragraph::new(transcript_lines)
+            .block(
+                Block::default()
+                    .title(" Transcript ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            )
             .wrap(Wrap { trim: false })
-            .scroll((self.scroll_transcript, 0));
+            .scroll((self.transcript_scroll, 0));
+        frame.render_widget(transcript, horizontal[0]);
 
-        frame.render_widget(paragraph, area);
-    }
-
-    fn render_response(&self, frame: &mut Frame, area: Rect) {
-        let mut text = String::new();
-        for (i, resp) in self.responses.iter().enumerate() {
+        // Response panel
+        let mut response_text = String::new();
+        for (i, r) in self.responses.iter().enumerate() {
             if i > 0 {
-                text.push_str("\n\n---\n\n");
+                response_text.push_str("\n\n─────\n\n");
             }
-            text.push_str(resp);
+            response_text.push_str(r);
         }
         if !self.current_response.is_empty() {
-            if !text.is_empty() {
-                text.push_str("\n\n---\n\n");
+            if !response_text.is_empty() {
+                response_text.push_str("\n\n─────\n\n");
             }
-            text.push_str(&self.current_response);
-            text.push('▋'); // blinking cursor indicator
+            response_text.push_str(&self.current_response);
+            response_text.push('▋');
         }
 
-        let block = Block::default()
-            .title(" AI Response ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Blue));
-
-        let paragraph = Paragraph::new(text)
-            .block(block)
+        let response = Paragraph::new(response_text)
+            .block(
+                Block::default()
+                    .title(" AI Response ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Blue)),
+            )
             .wrap(Wrap { trim: false })
-            .scroll((self.scroll_response, 0));
+            .scroll((self.response_scroll, 0));
+        frame.render_widget(response, horizontal[1]);
 
-        frame.render_widget(paragraph, area);
-    }
-
-    fn render_status(&self, frame: &mut Frame, area: Rect) {
-        let span = if let Some(ref err) = self.error {
-            Span::styled(
-                format!(" ERROR: {}", err),
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            )
+        // Input box
+        let input_text = format!("> {}_", self.input);
+        let input_style = if self.error.is_some() {
+            Style::default().fg(Color::Red)
         } else {
-            Span::styled(
-                format!(" {}", self.status),
-                Style::default().fg(Color::DarkGray),
-            )
+            Style::default().fg(Color::Yellow)
         };
-        frame.render_widget(Paragraph::new(Line::from(span)), area);
+        let hint = if let Some(ref e) = self.error {
+            format!(" ERROR: {} ", e)
+        } else {
+            format!(" {} ", self.status)
+        };
+        let input_block = Block::default()
+            .title(hint)
+            .borders(Borders::ALL)
+            .border_style(if self.error.is_some() {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            });
+        let input_widget =
+            Paragraph::new(Line::from(vec![Span::styled(input_text, input_style)]))
+                .block(input_block);
+        frame.render_widget(input_widget, vertical[1]);
     }
 }
 
 /// Run the TUI event loop. Blocks until the user quits.
-pub async fn run_tui(mut event_rx: mpsc::Receiver<TuiEvent>) -> Result<()> {
+pub async fn run_tui(
+    mut event_rx: mpsc::Receiver<TuiEvent>,
+    query_tx: mpsc::Sender<String>,
+) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -186,35 +171,90 @@ pub async fn run_tui(mut event_rx: mpsc::Receiver<TuiEvent>) -> Result<()> {
     while !should_quit {
         terminal.draw(|f| app.render(f))?;
 
-        // Poll for keyboard input (~60fps)
+        // Handle terminal input (16ms poll = ~60fps)
         if event::poll(std::time::Duration::from_millis(16))? {
             if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 match (key.code, key.modifiers) {
-                    (KeyCode::Char('q'), _) => should_quit = true,
+                    // Always quit on Ctrl+C
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => should_quit = true,
+
+                    // Quit on 'q' only when input box is empty
+                    (KeyCode::Char('q'), KeyModifiers::NONE) if app.input.is_empty() => {
+                        should_quit = true
+                    }
+
+                    // Enter: send query (typed text or empty = "use transcript")
+                    (KeyCode::Enter, _) => {
+                        let query = app.input.clone();
+                        app.input.clear();
+                        app.error = None;
+                        app.status = String::from("Querying AI...");
+                        let _ = query_tx.send(query).await;
+                    }
+
+                    // Escape: clear input
+                    (KeyCode::Esc, _) => {
+                        app.input.clear();
+                        app.error = None;
+                    }
+
+                    // Backspace
+                    (KeyCode::Backspace, _) => {
+                        app.input.pop();
+                    }
+
+                    // Scroll transcript
                     (KeyCode::Up, _) => {
-                        app.scroll_transcript = app.scroll_transcript.saturating_sub(1)
+                        app.transcript_scroll = app.transcript_scroll.saturating_sub(1)
                     }
                     (KeyCode::Down, _) => {
-                        app.scroll_transcript = app.scroll_transcript.saturating_add(1)
+                        app.transcript_scroll = app.transcript_scroll.saturating_add(1)
                     }
                     (KeyCode::PageUp, _) => {
-                        app.scroll_response = app.scroll_response.saturating_sub(5)
+                        app.response_scroll = app.response_scroll.saturating_sub(5)
                     }
                     (KeyCode::PageDown, _) => {
-                        app.scroll_response = app.scroll_response.saturating_add(5)
+                        app.response_scroll = app.response_scroll.saturating_add(5)
                     }
+
+                    // Type into input box
+                    (KeyCode::Char(c), _) => app.input.push(c),
+
                     _ => {}
                 }
             }
         }
 
-        // Drain pending events from the session
+        // Process events from session
         while let Ok(evt) = event_rx.try_recv() {
             match evt {
-                TuiEvent::Transcript { channel, text } => app.add_transcript(&channel, &text),
-                TuiEvent::ResponseToken(token) => app.add_token(&token),
-                TuiEvent::ResponseDone => app.finish_response(),
+                TuiEvent::Transcript { channel, text } => {
+                    app.transcript_lines.push((channel, text));
+                    // auto-scroll
+                    let total = app.transcript_lines.len() as u16;
+                    if total > 15 {
+                        app.transcript_scroll = total - 15;
+                    }
+                }
+                TuiEvent::ResponseToken(token) => {
+                    app.current_response.push_str(&token);
+                    // auto-scroll response
+                    let lines = app.current_response.matches('\n').count() as u16;
+                    if lines > 20 {
+                        app.response_scroll = lines - 20;
+                    }
+                }
+                TuiEvent::ResponseDone => {
+                    if !app.current_response.is_empty() {
+                        app.responses.push(app.current_response.clone());
+                        app.current_response.clear();
+                    }
+                    app.status =
+                        String::from("Done. Enter: query again | Type to ask manually");
+                }
                 TuiEvent::Status(s) => {
                     app.status = s;
                     app.error = None;
@@ -225,8 +265,8 @@ pub async fn run_tui(mut event_rx: mpsc::Receiver<TuiEvent>) -> Result<()> {
         }
     }
 
-    // Restore terminal
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
     Ok(())
 }

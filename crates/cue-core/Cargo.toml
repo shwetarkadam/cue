@@ -33,3 +33,5 @@ pin-project-lite.workspace = true
 lopdf.workspace = true
 libc.workspace = true
 notify-rust.workspace = true
+tokio-tungstenite.workspace = true
+url.workspace = true

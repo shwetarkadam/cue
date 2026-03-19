@@ -1,3 +1,6 @@
+pub mod deepgram;
+pub use deepgram::DeepgramStreamer;
+
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};

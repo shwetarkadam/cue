@@ -55,6 +55,12 @@ pub struct SttConfig {
     pub threads: u32,
     #[serde(default = "default_beam_size")]
     pub beam_size: u32,
+    /// STT backend: "whisper" (default) or "deepgram"
+    #[serde(default = "default_stt_backend")]
+    pub stt_backend: String,
+    /// Deepgram API key — loaded from env DEEPGRAM_API_KEY, not serialized to disk
+    #[serde(skip)]
+    pub deepgram_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +130,7 @@ fn default_stt_model() -> String { "tiny".to_string() }
 fn default_language() -> String { "en".to_string() }
 fn default_threads() -> u32 { 4 }
 fn default_beam_size() -> u32 { 1 }
+fn default_stt_backend() -> String { "whisper".to_string() }
 fn default_backend() -> String { "cpal".to_string() }
 fn default_auto() -> String { "auto".to_string() }
 fn default_vad_sensitivity() -> f32 { 0.5 }
@@ -161,6 +168,8 @@ impl Default for SttConfig {
             language: default_language(),
             threads: default_threads(),
             beam_size: default_beam_size(),
+            stt_backend: default_stt_backend(),
+            deepgram_api_key: None,
         }
     }
 }
@@ -283,6 +292,14 @@ impl Config {
             _ => None,
         };
         config.provider.api_key = api_key;
+
+        // Deepgram API key
+        config.stt.deepgram_api_key = std::env::var("DEEPGRAM_API_KEY").ok();
+
+        // STT backend from env
+        if let Ok(val) = std::env::var("CUE_STT_BACKEND") {
+            config.stt.stt_backend = val;
+        }
 
         // Display mode from env
         if let Ok(val) = std::env::var("CUE_DISPLAY") {
