@@ -17,28 +17,28 @@ release:
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 run: release models
-	$(BINARY) start
+	$(BINARY) start 2>/dev/null
 
 run-tui: release models
-	$(BINARY) start --tui
+	$(BINARY) start --tui 2>/dev/null
 
 run-coding: release models
-	$(BINARY) start --prompt coding --tui
+	$(BINARY) start --prompt coding --tui 2>/dev/null
 
 run-meeting: release models
-	$(BINARY) start --prompt meeting --tui
+	$(BINARY) start --prompt meeting --tui 2>/dev/null
 
 run-behavioral: release models
-	$(BINARY) start --prompt behavioral --tui
+	$(BINARY) start --prompt behavioral --tui 2>/dev/null
 
 run-system-design: release models
-	$(BINARY) start --prompt system_design --tui
+	$(BINARY) start --prompt system_design --tui 2>/dev/null
 
 run-notify: release models
-	$(BINARY) start --notify --daemon
+	$(BINARY) start --notify --daemon 2>/dev/null
 
 run-system-audio: release models
-	$(BINARY) start --system-audio --tui
+	$(BINARY) start --system-audio --tui 2>/dev/null
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 

@@ -23,7 +23,8 @@ impl SttEngine {
 
         info!(model = %model_path.display(), "Loading Whisper model");
 
-        let params = whisper_rs::WhisperContextParameters::default();
+        let mut params = whisper_rs::WhisperContextParameters::default();
+        params.use_gpu(false); // suppress GPU detection noise
         let ctx = whisper_rs::WhisperContext::new_with_params(
             model_path.to_str().context("Invalid model path")?,
             params,
