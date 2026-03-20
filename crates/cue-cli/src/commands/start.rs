@@ -1,7 +1,9 @@
 use anyhow::Result;
 use clap::Args;
+#[cfg(target_os = "linux")]
+use cue_core::audio::SystemAudioCapture;
 use cue_core::{
-    audio::{AudioCapture, SystemAudioCapture, Utterance},
+    audio::{AudioCapture, Utterance},
     config::Config,
     context::ContextEngine,
     kb::KnowledgeBase,
@@ -188,7 +190,8 @@ pub async fn run(args: StartArgs) -> Result<()> {
         None
     };
 
-    // ── System audio capture via pw-record ──────────────────────────────────
+    // ── System audio capture via pw-record (Linux only) ────────────────────
+    #[cfg(target_os = "linux")]
     if args.system_audio {
         if SystemAudioCapture::is_available() {
             let monitor = SystemAudioCapture::find_monitor_device();
@@ -222,6 +225,12 @@ pub async fn run(args: StartArgs) -> Result<()> {
                 )
                 .await;
         }
+    }
+    #[cfg(not(target_os = "linux"))]
+    if args.system_audio {
+        output
+            .emit_error("System audio capture is only available on Linux (requires PipeWire)")
+            .await;
     }
 
     // Channel for transcript entries

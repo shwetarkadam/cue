@@ -284,6 +284,24 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Get the N most recent exchanges across all sessions (chronological order)
+    pub fn get_recent_exchanges(&self, limit: usize) -> Result<Vec<(String, String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT query, response, created_at FROM exchanges ORDER BY id DESC LIMIT ?1",
+        )?;
+        let results = stmt.query_map(params![limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut r: Vec<_> = results.collect::<rusqlite::Result<_>>()?;
+        r.reverse(); // chronological
+        Ok(r)
+    }
+
     pub fn get_exchanges(&self, session_id: i64) -> Result<Vec<(String, String, String)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(

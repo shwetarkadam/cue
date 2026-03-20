@@ -27,11 +27,13 @@ impl ContextEngine {
         Self { kb, config }
     }
 
-    /// Build the full message list for the LLM
+    /// Build the full message list for the LLM.
+    /// `chat_history` is a list of (user_query, ai_response) pairs from this session.
     pub async fn build_prompt(
         &self,
         query: &str,
         transcript: &[TranscriptEntry],
+        chat_history: &[(String, String)],
         system_prompt: &str,
     ) -> Result<Vec<Message>> {
         // Token budget: 1500 tokens ≈ 6000 characters
@@ -45,7 +47,20 @@ impl ContextEngine {
         budget = budget.saturating_sub(approx_tokens(&system_msg));
         messages.push(Message::system(system_msg));
 
-        // 2. KB context (if enabled and documents exist)
+        // 2. Chat history — inject as alternating user/assistant turns
+        //    Use at most the last 6 exchanges to stay within budget
+        let history_window = chat_history.iter().rev().take(6).collect::<Vec<_>>();
+        for (user_q, ai_a) in history_window.into_iter().rev() {
+            let q_tok = approx_tokens(user_q);
+            let a_tok = approx_tokens(ai_a);
+            if q_tok + a_tok < budget / 2 {
+                messages.push(Message::user(user_q.clone()));
+                messages.push(Message::assistant(ai_a.clone()));
+                budget = budget.saturating_sub(q_tok + a_tok);
+            }
+        }
+
+        // 3. KB context (if enabled and documents exist)
         let mut kb_context = String::new();
         if self.config.enabled && !query.is_empty() {
             let chunks = tokio::task::spawn_blocking({
@@ -75,7 +90,7 @@ impl ContextEngine {
             }
         }
 
-        // 3. Recent transcript
+        // 4. Recent transcript
         let mut transcript_text = String::new();
         if !transcript.is_empty() {
             transcript_text.push_str("## Recent conversation transcript:\n\n");

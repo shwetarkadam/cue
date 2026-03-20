@@ -1,6 +1,6 @@
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
 use cue_core::{
@@ -9,42 +9,76 @@ use cue_core::{
     context::ContextEngine,
     kb::KnowledgeBase,
     llm::{self, CompletionConfig},
-    prompts::get_prompt,
+    prompts::{get_prompt, list_prompts, prompt_description},
     session::{SessionStore, TranscriptEntry},
     stt::DeepgramStreamer,
 };
 use futures::StreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 use tracing::error;
 
-// ── Event payloads ────────────────────────────────────────────────────────────
-
-#[derive(Clone, Serialize)]
-struct TranscriptPayload {
-    channel: String,
-    text: String,
-}
-
-#[derive(Clone, Serialize)]
-struct TokenPayload {
-    token: String,
-}
-
-#[derive(Clone, Serialize)]
-struct MessagePayload {
-    message: String,
-}
-
-// ── App state ─────────────────────────────────────────────────────────────────
+// ── Shared state ──────────────────────────────────────────────────────────────
 
 pub struct AppState {
     pub listening: Arc<AtomicBool>,
     pub query_tx: mpsc::Sender<String>,
+    pub kb: Arc<KnowledgeBase>,
+    pub session_store: Arc<SessionStore>,
+    pub active_prompt: Arc<Mutex<String>>,
+    pub session_id: i64,
 }
 
-// ── Commands (frontend → backend) ────────────────────────────────────────────
+// ── Event payloads ────────────────────────────────────────────────────────────
+
+#[derive(Clone, Serialize)]
+struct TranscriptPayload { channel: String, text: String }
+
+#[derive(Clone, Serialize)]
+struct TokenPayload { token: String }
+
+#[derive(Clone, Serialize)]
+struct Msg { message: String }
+
+// ── API types ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Settings {
+    pub provider: String,
+    pub model: String,
+    pub active_prompt: String,
+    pub anthropic_key: String,
+    pub openai_key: String,
+    pub deepgram_key: String,
+    pub groq_key: String,
+    pub ollama_endpoint: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptInfo {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KbDoc {
+    pub id: i64,
+    pub name: String,
+    pub doc_type: String,
+    pub chunk_count: usize,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HistoryItem {
+    pub query: String,
+    pub response: String,
+    pub created_at: String,
+}
+
+// ── Commands ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 async fn toggle_listening(state: State<'_, AppState>) -> Result<bool, String> {
@@ -55,79 +89,158 @@ async fn toggle_listening(state: State<'_, AppState>) -> Result<bool, String> {
 
 #[tauri::command]
 async fn send_query(query: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.query_tx.send(query).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn load_history(state: State<'_, AppState>) -> Result<Vec<HistoryItem>, String> {
     state
-        .query_tx
-        .send(query)
-        .await
+        .session_store
+        .get_recent_exchanges(30)
+        .map(|v| {
+            v.into_iter()
+                .map(|(q, r, t)| HistoryItem { query: q, response: r, created_at: t })
+                .collect()
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_prompts() -> Vec<PromptInfo> {
+    list_prompts()
+        .into_iter()
+        .map(|id| PromptInfo {
+            id: id.to_string(),
+            label: prompt_label(id),
+            description: prompt_description(id).to_string(),
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let active_prompt = state.active_prompt.lock().unwrap().clone();
+    Ok(Settings {
+        provider: config.provider.default,
+        model: config.provider.model,
+        active_prompt,
+        anthropic_key: std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
+        openai_key: std::env::var("OPENAI_API_KEY").unwrap_or_default(),
+        deepgram_key: std::env::var("DEEPGRAM_API_KEY").unwrap_or_default(),
+        groq_key: std::env::var("GROQ_API_KEY").unwrap_or_default(),
+        ollama_endpoint: config.provider.ollama_endpoint,
+    })
+}
+
+#[tauri::command]
+async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), String> {
+    let env_path = Config::config_dir().join(".env");
+    let mut lines = Vec::new();
+    if !settings.anthropic_key.is_empty() {
+        lines.push(format!("ANTHROPIC_API_KEY={}", settings.anthropic_key));
+    }
+    if !settings.openai_key.is_empty() {
+        lines.push(format!("OPENAI_API_KEY={}", settings.openai_key));
+    }
+    if !settings.deepgram_key.is_empty() {
+        lines.push(format!("DEEPGRAM_API_KEY={}", settings.deepgram_key));
+    }
+    if !settings.groq_key.is_empty() {
+        lines.push(format!("GROQ_API_KEY={}", settings.groq_key));
+    }
+    lines.push(format!("CUE_PROVIDER={}", settings.provider));
+    lines.push(format!("CUE_MODEL={}", settings.model));
+    if !settings.ollama_endpoint.is_empty() {
+        lines.push(format!("OLLAMA_ENDPOINT={}", settings.ollama_endpoint));
+    }
+    std::fs::write(&env_path, lines.join("\n") + "\n").map_err(|e| e.to_string())?;
+
+    *state.active_prompt.lock().unwrap() = settings.active_prompt;
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_kb(state: State<'_, AppState>) -> Result<Vec<KbDoc>, String> {
+    state
+        .kb
+        .list_documents()
+        .map(|docs| {
+            docs.into_iter()
+                .map(|d| KbDoc {
+                    id: d.id,
+                    name: d.name,
+                    doc_type: d.doc_type,
+                    chunk_count: d.chunk_count,
+                    created_at: d.created_at.format("%b %d, %Y").to_string(),
+                })
+                .collect()
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_kb_doc(id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    state.kb.remove_document(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ingest_kb_file(path: String, state: State<'_, AppState>) -> Result<KbDoc, String> {
+    let p = std::path::PathBuf::from(&path);
+    state
+        .kb
+        .ingest_file(&p)
+        .map(|d| KbDoc {
+            id: d.id,
+            name: d.name,
+            doc_type: d.doc_type,
+            chunk_count: d.chunk_count,
+            created_at: d.created_at.format("%b %d, %Y").to_string(),
+        })
         .map_err(|e| e.to_string())
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+fn prompt_label(id: &str) -> String {
+    match id {
+        "coding" => "Coding Interview",
+        "behavioral" => "Behavioral Interview",
+        "system_design" => "System Design",
+        "meeting" => "Meeting Assistant",
+        "sales" => "Sales",
+        _ => "General",
+    }
+    .to_string()
+}
+
 fn emit_status(app: &AppHandle, msg: impl Into<String>) {
-    let _ = app.emit("status", MessagePayload { message: msg.into() });
+    let _ = app.emit("status", Msg { message: msg.into() });
 }
 
 fn emit_error(app: &AppHandle, msg: impl Into<String>) {
-    let _ = app.emit("error", MessagePayload { message: msg.into() });
+    let _ = app.emit("error", Msg { message: msg.into() });
 }
 
-// ── Core pipeline (runs in dedicated OS thread with single-threaded runtime) ──
+// ── Pipeline ──────────────────────────────────────────────────────────────────
 
 async fn run_pipeline(
     app: AppHandle,
     mut query_rx: mpsc::Receiver<String>,
     listening: Arc<AtomicBool>,
+    kb: Arc<KnowledgeBase>,
+    session_store: Arc<SessionStore>,
+    active_prompt: Arc<Mutex<String>>,
+    session_id: i64,
 ) {
-    // Load config
     let config = match Config::load() {
         Ok(c) => c,
-        Err(e) => {
-            emit_error(&app, format!("Config load failed: {e}"));
-            return;
-        }
-    };
-    let _ = Config::ensure_dirs();
-
-    // Init DB
-    let db = Config::db_path();
-    let session_store = match SessionStore::new(&db) {
-        Ok(s) => {
-            let _ = s.init_schema();
-            Arc::new(s)
-        }
-        Err(e) => {
-            emit_error(&app, format!("Database error: {e}"));
-            return;
-        }
-    };
-    let kb = match KnowledgeBase::new(&db) {
-        Ok(k) => {
-            let _ = k.init_schema();
-            Arc::new(k)
-        }
-        Err(e) => {
-            emit_error(&app, format!("Knowledge base error: {e}"));
-            return;
-        }
+        Err(e) => { emit_error(&app, format!("Config: {e}")); return; }
     };
 
-    let session = match session_store.create_session("general") {
-        Ok(s) => s,
-        Err(e) => {
-            emit_error(&app, format!("Session error: {e}"));
-            return;
-        }
-    };
-    let session_id = session.id;
-
-    // LLM
     let router = match llm::build_router(&config.provider) {
         Ok(r) => Arc::new(r),
-        Err(e) => {
-            emit_error(&app, format!("LLM router error: {e}"));
-            return;
-        }
+        Err(e) => { emit_error(&app, format!("LLM: {e}")); return; }
     };
     let cc = CompletionConfig {
         temperature: config.provider.temperature,
@@ -135,25 +248,22 @@ async fn run_pipeline(
         model: config.provider.model.clone(),
     };
     let ctx = Arc::new(ContextEngine::new(Arc::clone(&kb), config.rag.clone()));
-    let prompt = get_prompt("general").to_string();
 
-    // Audio capture — _stream kept alive in this stack frame
+    // Audio capture — held alive in this stack frame
     let (utt_tx, utt_rx) = mpsc::channel::<Utterance>(16);
     let _stream = AudioCapture::new(config.audio.clone(), utt_tx)
         .start()
-        .map_err(|e| emit_error(&app, format!("Microphone error: {e}")))
+        .map_err(|e| emit_error(&app, format!("Mic: {e}")))
         .ok();
 
     // Transcript channel
     let (tx_entry, mut rx_entry) = mpsc::channel::<TranscriptEntry>(32);
 
-    // Deepgram STT with Ctrl+L gating
+    // Deepgram with Ctrl+L gating
     let deepgram_key = config.stt.deepgram_api_key.clone().unwrap_or_default();
     if !deepgram_key.is_empty() {
         let (dg_tx, dg_rx) = mpsc::channel::<Utterance>(32);
         let lis = Arc::clone(&listening);
-
-        // Gate: only forward utterances when listening is active
         tokio::spawn(async move {
             let mut rx = utt_rx;
             while let Some(u) = rx.recv().await {
@@ -162,22 +272,19 @@ async fn run_pipeline(
                 }
             }
         });
-
         let streamer = DeepgramStreamer::new(deepgram_key);
         let tx2 = tx_entry.clone();
         tokio::spawn(async move {
             if let Err(e) = streamer.run(dg_rx, tx2, session_id).await {
-                error!("Deepgram error: {e}");
+                error!("Deepgram: {e}");
             }
         });
-
-        emit_status(&app, "Ready — press Ctrl+L to start listening");
+        emit_status(&app, "Ready — Ctrl+L to listen");
     } else {
-        emit_error(&app, "DEEPGRAM_API_KEY not set — transcript disabled");
-        emit_status(&app, "Type a question to query AI");
+        emit_error(&app, "DEEPGRAM_API_KEY not set — add it in Settings");
+        emit_status(&app, "Type to ask AI (no audio)");
     }
 
-    // ── Main event loop ───────────────────────────────────────────────────────
     let mut recent: Vec<TranscriptEntry> = Vec::new();
 
     loop {
@@ -194,21 +301,19 @@ async fn run_pipeline(
 
             Some(q) = query_rx.recv() => {
                 let query = if q.is_empty() {
-                    recent.last()
-                        .map(|e| e.text.clone())
-                        .unwrap_or_else(|| "What was just discussed?".to_string())
-                } else {
-                    q
-                };
+                    recent.last().map(|e| e.text.clone())
+                        .unwrap_or_else(|| "What was just discussed?".into())
+                } else { q };
+
+                // Read active prompt each time (may have changed in settings)
+                let prompt_name = active_prompt.lock().unwrap().clone();
+                let system_prompt = get_prompt(&prompt_name).to_string();
 
                 emit_status(&app, "Thinking...");
 
-                let msgs = match ctx.build_prompt(&query, &recent, &prompt).await {
+                let msgs = match ctx.build_prompt(&query, &recent, &system_prompt).await {
                     Ok(m) => m,
-                    Err(e) => {
-                        emit_error(&app, format!("Prompt build failed: {e}"));
-                        continue;
-                    }
+                    Err(e) => { emit_error(&app, format!("Context: {e}")); continue; }
                 };
 
                 match router.stream(&msgs, &cc).await {
@@ -220,23 +325,17 @@ async fn run_pipeline(
                                     let _ = app.emit("response-token", TokenPayload { token: tok.clone() });
                                     full.push_str(&tok);
                                 }
-                                Err(e) => {
-                                    emit_error(&app, format!("Stream error: {e}"));
-                                    break;
-                                }
+                                Err(e) => { emit_error(&app, format!("Stream: {e}")); break; }
                             }
                         }
                         let _ = app.emit("response-done", ());
                         emit_status(&app, "Done. Ask anything.");
                         let _ = session_store.add_exchange(
-                            session_id,
-                            &query,
-                            &full,
-                            &config.provider.default,
-                            &config.provider.model,
+                            session_id, &query, &full,
+                            &config.provider.default, &config.provider.model,
                         );
                     }
-                    Err(e) => emit_error(&app, format!("LLM error: {e}")),
+                    Err(e) => emit_error(&app, format!("LLM: {e}")),
                 }
             }
         }
@@ -251,22 +350,77 @@ pub fn run() {
         .with_env_filter("cue_overlay=info,cue_core=info")
         .init();
 
+    // Pre-initialize shared resources
+    let _ = Config::ensure_dirs();
+    let db = Config::db_path();
+
+    let session_store = Arc::new(
+        SessionStore::new(&db).expect("Failed to open session DB"),
+    );
+    let _ = session_store.init_schema();
+
+    let kb = Arc::new(KnowledgeBase::new(&db).expect("Failed to open KB"));
+    let _ = kb.init_schema();
+
+    let active_prompt = Arc::new(Mutex::new("general".to_string()));
+
+    // Create session upfront
+    let session_id = session_store
+        .create_session("general")
+        .expect("Failed to create session")
+        .id;
+
     let (query_tx, query_rx) = mpsc::channel::<String>(8);
     let listening = Arc::new(AtomicBool::new(false));
+
+    // Clones for pipeline thread
+    let kb2 = Arc::clone(&kb);
+    let ss2 = Arc::clone(&session_store);
+    let ap2 = Arc::clone(&active_prompt);
     let listening2 = Arc::clone(&listening);
 
     tauri::Builder::default()
-        .manage(AppState { listening, query_tx })
-        .invoke_handler(tauri::generate_handler![toggle_listening, send_query])
+        .manage(AppState { listening, query_tx, kb, session_store, active_prompt, session_id })
+        .invoke_handler(tauri::generate_handler![
+            toggle_listening,
+            send_query,
+            load_history,
+            get_prompts,
+            get_settings,
+            save_settings,
+            list_kb,
+            delete_kb_doc,
+            ingest_kb_file,
+        ])
         .setup(move |app| {
+            // Auto-float + hide from screencast on Hyprland (no manual config needed)
+            let _ = std::process::Command::new("hyprctl")
+                .args(["keyword", "windowrulev2", "float,class:cue-overlay"])
+                .output();
+            let _ = std::process::Command::new("hyprctl")
+                .args(["keyword", "windowrulev2", "pin,class:cue-overlay"])
+                .output();
+            let _ = std::process::Command::new("hyprctl")
+                .args(["keyword", "windowrulev2", "noscreencast,class:cue-overlay"])
+                .output();
+            // Also match on productName "cue" (Wayland app-id)
+            let _ = std::process::Command::new("hyprctl")
+                .args(["keyword", "windowrulev2", "float,class:cue"])
+                .output();
+            let _ = std::process::Command::new("hyprctl")
+                .args(["keyword", "windowrulev2", "pin,class:cue"])
+                .output();
+            let _ = std::process::Command::new("hyprctl")
+                .args(["keyword", "windowrulev2", "noscreencast,class:cue"])
+                .output();
+
             let handle = app.handle().clone();
-            // Dedicated OS thread with single-threaded runtime so cpal::Stream (!Send) is safe
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
-                    .expect("Failed to build tokio runtime");
-                rt.block_on(run_pipeline(handle, query_rx, listening2));
+                    .expect("tokio runtime");
+                rt.block_on(run_pipeline(handle, query_rx, listening2, kb2, ss2, ap2, session_id));
             });
             Ok(())
         })

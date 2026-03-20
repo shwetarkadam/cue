@@ -1,0 +1,252 @@
+/* ── Window ──────────────────────────────────────────────────────────────── */
+window {
+  background: transparent;
+}
+
+/* ── Title bar ───────────────────────────────────────────────────────────── */
+.titlebar {
+  background: transparent;
+  padding: 2px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  min-height: 0;
+}
+
+.app-name {
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(240, 240, 245, 0.85);
+  letter-spacing: 0.3px;
+}
+
+.status-label {
+  font-size: 9px;
+  color: rgba(120, 120, 130, 0.6);
+}
+
+.status-label.listening {
+  color: #ef4444;
+}
+
+.status-label.error {
+  color: #ef4444;
+}
+
+/* ── Listening dot ───────────────────────────────────────────────────────── */
+.dot {
+  min-width: 6px;
+  min-height: 6px;
+  border-radius: 99px;
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.dot.active {
+  background-color: #ef4444;
+}
+
+/* ── Divider ─────────────────────────────────────────────────────────────── */
+.divider {
+  background-color: rgba(255, 255, 255, 0.05);
+  min-height: 1px;
+}
+
+/* ── Transcript ──────────────────────────────────────────────────────────── */
+.transcript-area {
+  padding: 4px 10px;
+  background: transparent;
+}
+
+.transcript-line {
+  font-size: 10px;
+  color: rgba(220, 220, 230, 0.7);
+}
+
+.ch-mic {
+  color: #4ade80;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.ch-sys {
+  color: #22d3ee;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+/* ── Conversation ────────────────────────────────────────────────────────── */
+.conv-area {
+  background: transparent;
+  padding: 6px 10px;
+}
+
+.conv-empty {
+  color: rgba(120, 120, 130, 0.4);
+  font-size: 11px;
+}
+
+/* User bubble */
+.user-bubble {
+  background-color: rgba(59, 130, 246, 0.18);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 10px 10px 2px 10px;
+  padding: 5px 10px;
+  color: rgba(240, 240, 245, 0.92);
+  font-size: 11px;
+}
+
+/* AI bubble */
+.ai-bubble {
+  background-color: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 2px 10px 10px 10px;
+}
+
+.ai-bubble > textview,
+.ai-bubble textview {
+  background-color: transparent;
+  color: rgba(235, 235, 240, 0.88);
+  font-size: 11px;
+  padding: 5px 10px;
+}
+
+.ai-bubble textview > text,
+.ai-bubble textview text {
+  background-color: transparent;
+  color: rgba(235, 235, 240, 0.88);
+}
+
+/* ── Input bar ───────────────────────────────────────────────────────────── */
+.input-bar {
+  padding: 6px 8px;
+  background: transparent;
+}
+
+.glass-entry,
+entry.glass-entry {
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: rgba(240, 240, 245, 0.92);
+  font-size: 11px;
+  min-height: 28px;
+  box-shadow: none;
+  caret-color: #3b82f6;
+}
+
+entry.glass-entry text {
+  color: rgba(240, 240, 245, 0.92);
+}
+
+entry.glass-entry:focus {
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: none;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+button.icon-btn {
+  background: none;
+  border: none;
+  border-radius: 3px;
+  color: rgba(160, 160, 170, 0.5);
+  min-width: 18px;
+  min-height: 18px;
+  padding: 0;
+  box-shadow: none;
+  font-size: 10px;
+}
+
+button.icon-btn:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+  color: rgba(240, 240, 245, 0.85);
+}
+
+button.icon-btn.active-btn {
+  color: #3b82f6;
+}
+
+button.icon-btn.active-btn:hover {
+  background-color: rgba(59, 130, 246, 0.15);
+}
+
+button.icon-btn.mic-btn {
+  color: #ef4444;
+}
+
+button.icon-btn.mic-btn:hover {
+  background-color: rgba(239, 68, 68, 0.15);
+}
+
+/* ── Settings ────────────────────────────────────────────────────────────── */
+.settings-area {
+  padding: 12px;
+  background: transparent;
+}
+
+.settings-label {
+  color: rgba(150, 150, 160, 0.65);
+  font-size: 10px;
+}
+
+.settings-section-title {
+  color: rgba(240, 240, 245, 0.88);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+entry.settings-entry {
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: rgba(240, 240, 245, 0.88);
+  font-size: 11px;
+  min-height: 26px;
+}
+
+.prompt-row {
+  background-color: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.prompt-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(240, 240, 245, 0.88);
+}
+
+.prompt-desc {
+  font-size: 9px;
+  color: rgba(150, 150, 160, 0.5);
+}
+
+.code-block {
+  background-color: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: monospace;
+  font-size: 10px;
+  color: #4ade80;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+scrollbar {
+  background: transparent;
+  min-width: 3px;
+}
+
+scrollbar slider {
+  background-color: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  min-width: 3px;
+  min-height: 16px;
+}
+
+scrollbar slider:hover {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+/* ── ListBox rows ────────────────────────────────────────────────────────── */
+list, row, row:hover {
+  background-color: transparent;
+}

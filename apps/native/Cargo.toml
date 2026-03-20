@@ -1,0 +1,21 @@
+[package]
+name = "cue-native"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "cue-native"
+path = "src/main.rs"
+
+[dependencies]
+cue-core        = { path = "../../crates/cue-core" }
+gtk4            = { version = "0.10", features = ["v4_12"] }
+glib            = "0.21"
+async-channel   = "2"
+tokio           = { workspace = true }
+serde           = { workspace = true }
+anyhow          = { workspace = true }
+futures         = { workspace = true }
+chrono          = { workspace = true }
+tracing         = { workspace = true }
+tracing-subscriber = { workspace = true }

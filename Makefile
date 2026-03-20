@@ -78,19 +78,30 @@ check:
 clean:
 	cargo clean
 
+# ── Native GTK4 overlay ───────────────────────────────────────────────────────
+
+native-build:
+	cargo build --release -p cue-native
+
+native-dev:
+	GTK_THEME=Adwaita:dark cargo run -p cue-native
+
+native-run:
+	GTK_THEME=Adwaita:dark ./target/release/cue-native
+
 # ── Overlay (Tauri) ───────────────────────────────────────────────────────────
 
 overlay-install:
 	cd apps/overlay && npm install
 
 overlay-dev: overlay-install
-	cd apps/overlay && GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_FORCE_SANDBOX=0 npx tauri dev
+	cd apps/overlay && GDK_BACKEND=x11 WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 npx tauri dev
 
 overlay-build: overlay-install
-	cd apps/overlay && GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_FORCE_SANDBOX=0 npx tauri build --bundles deb,rpm
+	cd apps/overlay && GDK_BACKEND=x11 WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 npx tauri build --bundles deb,rpm
 
 overlay-run:
-	GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_FORCE_SANDBOX=0 ./target/release/cue-overlay
+	GDK_BACKEND=x11 WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 ./target/release/cue-overlay
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 

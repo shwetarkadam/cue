@@ -9,5 +9,6 @@ pub mod prompts;
 pub mod session;
 pub mod stealth;
 pub mod stt;
+pub mod tts;
 
 pub use error::{CueError, Result};

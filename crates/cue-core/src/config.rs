@@ -20,6 +20,8 @@ pub struct Config {
     pub stealth: StealthConfig,
     #[serde(default)]
     pub response: ResponseConfig,
+    #[serde(default)]
+    pub tts: TtsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +121,22 @@ pub struct ResponseConfig {
     pub style: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TtsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_tts_model")]
+    pub model: String,
+    #[serde(default = "default_tts_voice")]
+    pub voice: String,
+    #[serde(default = "default_tts_speed")]
+    pub speed: f32,
+    #[serde(default = "default_python_bin")]
+    pub python_bin: String,
+    #[serde(default)]
+    pub script_path: String,
+}
+
 // Default functions
 fn default_provider() -> String { "anthropic".to_string() }
 fn default_model() -> String { "claude-sonnet-4-20250514".to_string() }
@@ -145,6 +163,10 @@ fn default_trigger_mode() -> String { "manual".to_string() }
 fn default_display_mode() -> String { "stdout".to_string() }
 fn default_camouflage_name() -> String { "pipewire-pulse".to_string() }
 fn default_response_style() -> String { "concise".to_string() }
+fn default_tts_model() -> String { "KittenML/kitten-tts-nano-0.8-int8".to_string() }
+fn default_tts_voice() -> String { "Jasper".to_string() }
+fn default_tts_speed() -> f32 { 1.0 }
+fn default_python_bin() -> String { "python3".to_string() }
 
 impl Default for ProviderConfig {
     fn default() -> Self {
@@ -226,6 +248,19 @@ impl Default for ResponseConfig {
     }
 }
 
+impl Default for TtsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_tts_model(),
+            voice: default_tts_voice(),
+            speed: default_tts_speed(),
+            python_bin: default_python_bin(),
+            script_path: String::new(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -237,6 +272,7 @@ impl Default for Config {
             display: DisplayConfig::default(),
             stealth: StealthConfig::default(),
             response: ResponseConfig::default(),
+            tts: TtsConfig::default(),
         }
     }
 }

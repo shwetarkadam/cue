@@ -1,5 +1,7 @@
 use anyhow::Result;
-use cue_core::audio::{AudioCapture, SystemAudioCapture};
+use cue_core::audio::AudioCapture;
+#[cfg(target_os = "linux")]
+use cue_core::audio::SystemAudioCapture;
 
 pub fn run() -> Result<()> {
     let devices = AudioCapture::list_devices()?;
@@ -31,24 +33,32 @@ pub fn run() -> Result<()> {
 
     println!("\n* = default device");
 
-    // Show PipeWire monitor sources (for --system-audio)
-    println!("\n--- PipeWire Monitor Sources (for --system-audio) ---");
-    if SystemAudioCapture::is_available() {
-        match SystemAudioCapture::find_monitor_device() {
-            Some(monitor) => {
-                println!("pw-record available  [OK]");
-                println!("Default monitor source: {}", monitor);
+    // Show PipeWire monitor sources (Linux only)
+    #[cfg(target_os = "linux")]
+    {
+        println!("\n--- PipeWire Monitor Sources (for --system-audio) ---");
+        if SystemAudioCapture::is_available() {
+            match SystemAudioCapture::find_monitor_device() {
+                Some(monitor) => {
+                    println!("pw-record available  [OK]");
+                    println!("Default monitor source: {}", monitor);
+                }
+                None => {
+                    println!("pw-record available  [OK]");
+                    println!("No monitor source found via pactl (may still work with --system-audio)");
+                }
             }
-            None => {
-                println!("pw-record available  [OK]");
-                println!("No monitor source found via pactl (may still work with --system-audio)");
-            }
+        } else {
+            println!(
+                "pw-record not found. Install with: sudo apt install pipewire-audio-client-libraries"
+            );
+            println!("System audio capture (--system-audio) requires pw-record.");
         }
-    } else {
-        println!(
-            "pw-record not found. Install with: sudo apt install pipewire-audio-client-libraries"
-        );
-        println!("System audio capture (--system-audio) requires pw-record.");
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        println!("\nNote: System audio capture (--system-audio) is only available on Linux.");
     }
 
     Ok(())

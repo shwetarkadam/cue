@@ -1,6 +1,8 @@
+#[cfg(target_os = "linux")]
 pub mod pipewire;
 pub mod vad;
 
+#[cfg(target_os = "linux")]
 pub use pipewire::SystemAudioCapture;
 
 use anyhow::{Context, Result};
