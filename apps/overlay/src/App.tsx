@@ -35,6 +35,10 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
   const [input, setInput] = useState("");
+
+  // STT live transcription state
+  const sttCommittedRef = useRef("");    // finalized text so far
+  const sttInterimRef = useRef("");      // current interim partial
   const [view, setView] = useState<"chat" | "settings">("chat");
 
   // Settings state
@@ -104,6 +108,29 @@ export default function App() {
       setTimeout(() => convEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
     }).then((u) => unsubs.push(u));
 
+    listen<{ text: string; is_final: boolean }>("stt-live", (e) => {
+      const { text, is_final } = e.payload;
+      if (is_final) {
+        // Commit this final segment
+        if (text) {
+          sttCommittedRef.current = sttCommittedRef.current
+            ? sttCommittedRef.current + " " + text
+            : text;
+        }
+        sttInterimRef.current = "";
+      } else {
+        // Update interim (partial) text
+        sttInterimRef.current = text;
+      }
+      // Build the live input: committed + interim
+      const committed = sttCommittedRef.current;
+      const interim = sttInterimRef.current;
+      const combined = committed && interim
+        ? committed + " " + interim
+        : committed || interim;
+      setInput(combined);
+    }).then((u) => unsubs.push(u));
+
     listen<{ message: string }>("status", (e) => {
       setStatus(e.payload.message);
       setError(null);
@@ -121,13 +148,29 @@ export default function App() {
   const toggleListen = useCallback(async () => {
     const newState = await invoke<boolean>("toggle_listening");
     setListening(newState);
-    if (!newState) setError(null);
+    if (newState) {
+      // Starting to listen — reset STT accumulators
+      sttCommittedRef.current = "";
+      sttInterimRef.current = "";
+    } else {
+      // Stopped listening — commit any remaining interim text
+      if (sttInterimRef.current) {
+        sttCommittedRef.current = sttCommittedRef.current
+          ? sttCommittedRef.current + " " + sttInterimRef.current
+          : sttInterimRef.current;
+        sttInterimRef.current = "";
+        setInput(sttCommittedRef.current);
+      }
+      setError(null);
+    }
   }, []);
 
   const sendQuery = useCallback(async () => {
     const q = input.trim();
     if (!q) return;
     setInput("");
+    sttCommittedRef.current = "";
+    sttInterimRef.current = "";
     userScrolledRef.current = false;
     const entry: ConvEntry = {
       query: q,

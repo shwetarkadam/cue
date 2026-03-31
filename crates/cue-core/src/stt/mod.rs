@@ -1,5 +1,7 @@
 pub mod deepgram;
-pub use deepgram::DeepgramStreamer;
+pub mod parakeet;
+pub use deepgram::{DeepgramStreamer, SttEvent};
+pub use parakeet::ParakeetStreamer;
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};

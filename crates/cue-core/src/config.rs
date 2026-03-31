@@ -152,7 +152,7 @@ fn default_stt_backend() -> String { "deepgram".to_string() }
 fn default_backend() -> String { "cpal".to_string() }
 fn default_auto() -> String { "auto".to_string() }
 fn default_vad_sensitivity() -> f32 { 0.5 }
-fn default_vad_silence_timeout_ms() -> u32 { 1000 }
+fn default_vad_silence_timeout_ms() -> u32 { 600 }
 fn default_vad_min_speech_ms() -> u32 { 250 }
 fn default_true() -> bool { true }
 fn default_top_k() -> usize { 5 }

@@ -11,7 +11,7 @@ use cue_core::{
     llm::{self, CompletionConfig},
     prompts::{get_prompt, list_prompts, prompt_description},
     session::{SessionStore, TranscriptEntry},
-    stt::DeepgramStreamer,
+    stt::{DeepgramStreamer, SttEvent},
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,9 @@ struct TranscriptPayload { channel: String, text: String }
 
 #[derive(Clone, Serialize)]
 struct TokenPayload { token: String }
+
+#[derive(Clone, Serialize)]
+struct SttPayload { text: String, is_final: bool }
 
 #[derive(Clone, Serialize)]
 struct Msg { message: String }
@@ -259,6 +262,18 @@ async fn run_pipeline(
     // Transcript channel
     let (tx_entry, mut rx_entry) = mpsc::channel::<TranscriptEntry>(32);
 
+    // STT event channel for real-time input box updates
+    let (stt_tx, mut stt_rx) = mpsc::channel::<SttEvent>(64);
+    let stt_app = app.clone();
+    tokio::spawn(async move {
+        while let Some(evt) = stt_rx.recv().await {
+            let _ = stt_app.emit("stt-live", SttPayload {
+                text: evt.text,
+                is_final: evt.is_final,
+            });
+        }
+    });
+
     // Deepgram with Ctrl+L gating
     let deepgram_key = config.stt.deepgram_api_key.clone().unwrap_or_default();
     if !deepgram_key.is_empty() {
@@ -275,7 +290,8 @@ async fn run_pipeline(
         let streamer = DeepgramStreamer::new(deepgram_key);
         let tx2 = tx_entry.clone();
         tokio::spawn(async move {
-            if let Err(e) = streamer.run(dg_rx, tx2, session_id).await {
+            let mut dg_rx = dg_rx;
+            if let Err(e) = streamer.run(&mut dg_rx, tx2, stt_tx, session_id).await {
                 error!("Deepgram: {e}");
             }
         });
@@ -311,7 +327,15 @@ async fn run_pipeline(
 
                 emit_status(&app, "Thinking...");
 
-                let msgs = match ctx.build_prompt(&query, &recent, &system_prompt).await {
+                // Build chat history from recent conversation
+                let chat_history: Vec<(String, String)> = session_store
+                    .get_recent_exchanges(10)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(q, r, _)| (q, r))
+                    .collect();
+
+                let msgs = match ctx.build_prompt(&query, &recent, &chat_history, &system_prompt).await {
                     Ok(m) => m,
                     Err(e) => { emit_error(&app, format!("Context: {e}")); continue; }
                 };

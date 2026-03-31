@@ -68,6 +68,9 @@ thiserror = "2"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 url = "2"
 
+# ONNX Runtime (Parakeet local STT)
+ort = "2.0.0-rc.12"
+
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }

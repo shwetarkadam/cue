@@ -26,6 +26,13 @@ struct DeepgramAlternative {
     confidence: Option<f64>,
 }
 
+/// Sent from Deepgram streamer to the app for real-time input-box updates.
+#[derive(Debug, Clone)]
+pub struct SttEvent {
+    pub text: String,
+    pub is_final: bool,
+}
+
 pub struct DeepgramStreamer {
     api_key: String,
 }
@@ -41,10 +48,11 @@ impl DeepgramStreamer {
         &self,
         utterance_rx: &mut mpsc::Receiver<Utterance>,
         transcript_tx: mpsc::Sender<TranscriptEntry>,
+        stt_tx: mpsc::Sender<SttEvent>,
         session_id: i64,
     ) -> Result<()> {
         loop {
-            match self.run_once(utterance_rx, &transcript_tx, session_id).await {
+            match self.run_once(utterance_rx, &transcript_tx, &stt_tx, session_id).await {
                 Ok(true) => {
                     info!("Deepgram: audio source closed, shutting down");
                     return Ok(());
@@ -69,11 +77,12 @@ impl DeepgramStreamer {
         &self,
         utterance_rx: &mut mpsc::Receiver<Utterance>,
         transcript_tx: &mpsc::Sender<TranscriptEntry>,
+        stt_tx: &mpsc::Sender<SttEvent>,
         session_id: i64,
     ) -> Result<bool> {
         let url = "wss://api.deepgram.com/v1/listen?\
             model=nova-2&language=en&encoding=linear16&sample_rate=16000\
-            &channels=1&punctuate=true&smart_format=true&interim_results=false\
+            &channels=1&punctuate=true&smart_format=true&interim_results=true\
             &keepalive=true";
 
         let request = tokio_tungstenite::tungstenite::http::Request::builder()
@@ -100,19 +109,27 @@ impl DeepgramStreamer {
 
         // Spawn WS receiver task
         let tx = transcript_tx.clone();
+        let stt = stt_tx.clone();
         tokio::spawn(async move {
             while let Some(msg) = ws_recv.next().await {
                 match msg {
                     Ok(Message::Text(text)) => {
                         if let Ok(resp) = serde_json::from_str::<DeepgramResponse>(&text) {
-                            let is_final = resp.is_final.unwrap_or(false)
-                                || resp.speech_final.unwrap_or(false);
-                            if is_final {
-                                if let Some(channel) = resp.channel {
-                                    if let Some(alt) = channel.alternatives.first() {
-                                        let t = alt.transcript.trim().to_string();
-                                        if !t.is_empty() {
-                                            debug!(text = %t, "Deepgram transcript");
+                            let is_final = resp.is_final.unwrap_or(false);
+                            let speech_final = resp.speech_final.unwrap_or(false);
+                            if let Some(channel) = resp.channel {
+                                if let Some(alt) = channel.alternatives.first() {
+                                    let t = alt.transcript.trim().to_string();
+                                    if !t.is_empty() {
+                                        // Send real-time STT event (interim or final)
+                                        let _ = stt.send(SttEvent {
+                                            text: t.clone(),
+                                            is_final,
+                                        }).await;
+
+                                        // Only persist final transcripts
+                                        if is_final || speech_final {
+                                            debug!(text = %t, "Deepgram final transcript");
                                             let entry = TranscriptEntry {
                                                 id: None,
                                                 session_id,
@@ -122,6 +139,12 @@ impl DeepgramStreamer {
                                             };
                                             let _ = tx.send(entry).await;
                                         }
+                                    } else if is_final {
+                                        // Empty final — still notify so frontend commits
+                                        let _ = stt.send(SttEvent {
+                                            text: String::new(),
+                                            is_final: true,
+                                        }).await;
                                     }
                                 }
                             }

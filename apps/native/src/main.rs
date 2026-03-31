@@ -21,7 +21,7 @@ use cue_core::{
     llm::{self, CompletionConfig},
     prompts::{get_prompt, list_prompts, prompt_description},
     session::{SessionStore, TranscriptEntry},
-    stt::DeepgramStreamer,
+    stt::{DeepgramStreamer, ParakeetStreamer, SttEvent},
     tts::TtsEngine,
 };
 
@@ -35,6 +35,7 @@ enum UiMsg {
     Error(String),
     Transcript { channel: String, text: String },
     AutoQuery(String),
+    SttLive { text: String, is_final: bool },
 }
 
 // ── Window manager IPC ────────────────────────────────────────────────────────
@@ -76,7 +77,10 @@ fn hypr_cmd(_cmd: &str) {
 
 fn main() {
     tracing_subscriber::fmt()
-        .with_env_filter("cue_native=info,cue_core=info")
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "cue_native=info,cue_core=info".parse().unwrap())
+        )
         .init();
 
     let _ = Config::ensure_dirs();
@@ -428,13 +432,19 @@ fn build_window(
     ));
     titlebar.add_controller(move_drag);
 
+    // STT live transcription state (shared with toggle_listen + UI event loop)
+    let stt_committed: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let stt_interim: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+
     // Mic toggle
     mic_btn.connect_clicked(clone!(
         #[weak] dot,
         #[weak] mic_btn,
         #[weak] status_lbl,
         #[strong] listening,
-        move |_| { toggle_listen(&listening, &dot, &mic_btn, &status_lbl); }
+        #[strong] stt_committed,
+        #[strong] stt_interim,
+        move |_| { toggle_listen(&listening, &dot, &mic_btn, &status_lbl, &stt_committed, &stt_interim); }
     ));
 
     // Ctrl+L shortcut
@@ -445,12 +455,14 @@ fn build_window(
         #[weak] status_lbl,
         #[weak] window,
         #[strong] listening,
+        #[strong] stt_committed,
+        #[strong] stt_interim,
         #[upgrade_or] glib::Propagation::Proceed,
         move |_, key, _, mods| {
             let ctrl = mods.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
             let shift = mods.contains(gtk4::gdk::ModifierType::SHIFT_MASK);
             if ctrl && key == gtk4::gdk::Key::l {
-                toggle_listen(&listening, &dot, &mic_btn, &status_lbl);
+                toggle_listen(&listening, &dot, &mic_btn, &status_lbl, &stt_committed, &stt_interim);
                 glib::Propagation::Stop
             } else if ctrl && shift && key == gtk4::gdk::Key::H {
                 // Ctrl+Shift+H: toggle overlay visibility (hide during screen share)
@@ -474,10 +486,14 @@ fn build_window(
         let conv_scroll = conv_scroll.clone();
         let current_slot = Arc::clone(&current_slot);
         let input_entry = input_entry.clone();
+        let stt_committed = Arc::clone(&stt_committed);
+        let stt_interim = Arc::clone(&stt_interim);
         move || {
             let text = input_entry.text().trim().to_string();
             if text.is_empty() { return; }
             input_entry.set_text("");
+            *stt_committed.lock().unwrap() = String::new();
+            *stt_interim.lock().unwrap() = String::new();
             let (buf, tv, container) = append_conv_row(&conv_list, &text);
             *current_slot.lock().unwrap() = Some((buf, tv, container, String::new()));
             scroll_to_bottom(&conv_scroll);
@@ -504,7 +520,10 @@ fn build_window(
         #[weak] transcript_scroll,
         #[weak] conv_scroll,
         #[weak] conv_list,
+        #[strong] input_entry,
         #[strong] current_slot,
+        #[strong] stt_committed,
+        #[strong] stt_interim,
         async move {
             while let Ok(msg) = ui_rx.recv().await {
                 match msg {
@@ -547,6 +566,31 @@ fn build_window(
                         scroll_to_bottom(&conv_scroll);
                         let tx = auto_query_tx.clone();
                         glib::spawn_future_local(async move { let _ = tx.send(text).await; });
+                    }
+                    UiMsg::SttLive { text, is_final } => {
+                        if is_final {
+                            let mut committed = stt_committed.lock().unwrap();
+                            if !text.is_empty() {
+                                if !committed.is_empty() {
+                                    committed.push(' ');
+                                }
+                                committed.push_str(&text);
+                            }
+                            *stt_interim.lock().unwrap() = String::new();
+                        } else {
+                            *stt_interim.lock().unwrap() = text;
+                        }
+                        let committed = stt_committed.lock().unwrap().clone();
+                        let interim = stt_interim.lock().unwrap().clone();
+                        let combined = if !committed.is_empty() && !interim.is_empty() {
+                            format!("{} {}", committed, interim)
+                        } else if !committed.is_empty() {
+                            committed
+                        } else {
+                            interim
+                        };
+                        input_entry.set_text(&combined);
+                        input_entry.set_position(-1); // cursor at end
                     }
                 }
             }
@@ -627,15 +671,30 @@ fn toggle_listen(
     dot: &Label,
     mic_btn: &Button,
     status: &Label,
+    stt_committed: &Arc<Mutex<String>>,
+    stt_interim: &Arc<Mutex<String>>,
 ) {
     let new = !listening.load(Ordering::Relaxed);
     listening.store(new, Ordering::Relaxed);
     if new {
+        // Starting to listen — reset STT accumulators
+        *stt_committed.lock().unwrap() = String::new();
+        *stt_interim.lock().unwrap() = String::new();
         dot.add_css_class("active");
         mic_btn.add_css_class("mic-btn");
         status.add_css_class("listening");
         status.set_text("listening…");
     } else {
+        // Stopped — commit any remaining interim text
+        let interim = stt_interim.lock().unwrap().clone();
+        if !interim.is_empty() {
+            let mut committed = stt_committed.lock().unwrap();
+            if !committed.is_empty() {
+                committed.push(' ');
+            }
+            committed.push_str(&interim);
+            *stt_interim.lock().unwrap() = String::new();
+        }
         dot.remove_css_class("active");
         mic_btn.remove_css_class("mic-btn");
         status.remove_css_class("listening");
@@ -1130,30 +1189,60 @@ async fn run_pipeline(
 
     let (tx_entry, mut rx_entry) = mpsc::channel::<TranscriptEntry>(32);
 
-    let deepgram_key = config.stt.deepgram_api_key.clone().unwrap_or_default();
-    if !deepgram_key.is_empty() {
-        let (dg_tx, dg_rx) = mpsc::channel::<Utterance>(32);
-        let lis = Arc::clone(&listening);
-        tokio::spawn(async move {
-            let mut rx = utt_rx;
-            while let Some(u) = rx.recv().await {
-                if lis.load(Ordering::Relaxed) {
-                    let _ = dg_tx.send(u).await;
+    // STT event channel for real-time input box updates
+    let (stt_tx, mut stt_rx) = mpsc::channel::<SttEvent>(64);
+    let stt_ui_tx = ui_tx.clone();
+    tokio::spawn(async move {
+        while let Some(evt) = stt_rx.recv().await {
+            tracing::info!(text = %evt.text, is_final = evt.is_final, "STT event received");
+            let _ = stt_ui_tx.send(UiMsg::SttLive {
+                text: evt.text,
+                is_final: evt.is_final,
+            }).await;
+        }
+    });
+
+    // Gate utterances through listening flag
+    let (gated_tx, gated_rx) = mpsc::channel::<Utterance>(32);
+    let lis = Arc::clone(&listening);
+    tokio::spawn(async move {
+        let mut rx = utt_rx;
+        while let Some(u) = rx.recv().await {
+            if lis.load(Ordering::Relaxed) {
+                let _ = gated_tx.send(u).await;
+            }
+        }
+    });
+
+    // Try Parakeet (local) first, fall back to Deepgram (cloud)
+    match ParakeetStreamer::new(None) {
+        Ok(streamer) => {
+            let tx2 = tx_entry.clone();
+            tokio::spawn(async move {
+                if let Err(e) = streamer.run(gated_rx, tx2, stt_tx, session_id).await {
+                    error!("Parakeet: {e}");
                 }
+            });
+            send!(UiMsg::Status("Ready (Parakeet local) — Ctrl+L to listen".into()));
+        }
+        Err(e) => {
+            tracing::info!("Parakeet not available: {e}, trying Deepgram");
+            let deepgram_key = config.stt.deepgram_api_key.clone().unwrap_or_default();
+            if !deepgram_key.is_empty() {
+                let streamer = DeepgramStreamer::new(deepgram_key);
+                let tx2 = tx_entry.clone();
+                tokio::spawn(async move {
+                    let mut rx = gated_rx;
+                    if let Err(e) = streamer.run(&mut rx, tx2, stt_tx, session_id).await {
+                        error!("Deepgram: {e}");
+                    }
+                });
+                send!(UiMsg::Status("Ready (Deepgram) — Ctrl+L to listen".into()));
+            } else {
+                send!(UiMsg::Error("No STT available — install Parakeet model or add Deepgram key".into()));
+                send!(UiMsg::Status("Type to ask AI (no audio)".into()));
             }
-        });
-        let streamer = DeepgramStreamer::new(deepgram_key);
-        let tx2 = tx_entry.clone();
-        tokio::spawn(async move {
-            let mut rx = dg_rx;
-            if let Err(e) = streamer.run(&mut rx, tx2, session_id).await {
-                error!("Deepgram: {e}");
-            }
-        });
-        send!(UiMsg::Status("Ready — Ctrl+L to listen".into()));
-    } else {
-        send!(UiMsg::Error("DEEPGRAM_API_KEY not set — add it in Settings".into()));
-        send!(UiMsg::Status("Type to ask AI (no audio)".into()));
+        }
     }
 
     let mut recent: Vec<TranscriptEntry> = Vec::new();

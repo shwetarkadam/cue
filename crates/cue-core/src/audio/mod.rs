@@ -447,6 +447,11 @@ impl AudioState {
             return;
         }
 
+        // Clamp to [-1, 1] — rubato FFT resampler can overshoot
+        let resampled: Vec<f32> = resampled.into_iter()
+            .map(|s| s.clamp(-1.0, 1.0))
+            .collect();
+
         // Run VAD on ~10ms chunks at target rate
         let vad_chunk_size = (self.target_sample_rate / 100) as usize;
         for chunk in resampled.chunks(vad_chunk_size) {
