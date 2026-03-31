@@ -1,4 +1,5 @@
 pub mod ask;
+pub mod brain;
 pub mod config_cmd;
 pub mod daemon;
 pub mod devices;

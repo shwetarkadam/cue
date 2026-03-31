@@ -15,11 +15,12 @@ use tracing::error;
 
 use cue_core::{
     audio::{AudioCapture, Utterance},
+    brain::BrainStore,
     config::Config,
     context::ContextEngine,
     kb::KnowledgeBase,
     llm::{self, CompletionConfig},
-    prompts::{get_prompt, list_prompts, prompt_description},
+    prompts::{list_all_prompts, resolve_prompt},
     session::{SessionStore, TranscriptEntry},
     stt::{DeepgramStreamer, ParakeetStreamer, SttEvent},
     tts::TtsEngine,
@@ -90,6 +91,8 @@ fn main() {
     let _ = session_store.init_schema();
     let kb = Arc::new(KnowledgeBase::new(&db).expect("KB DB"));
     let _ = kb.init_schema();
+    let brain = Arc::new(BrainStore::new(&db).expect("brain DB"));
+    let _ = brain.init_schema();
 
     let active_prompt = Arc::new(Mutex::new("general".to_string()));
     let session_id = session_store.create_session("general").expect("session").id;
@@ -103,6 +106,7 @@ fn main() {
     // Pipeline thread
     {
         let kb2 = Arc::clone(&kb);
+        let brain2 = Arc::clone(&brain);
         let ss2 = Arc::clone(&session_store);
         let ap2 = Arc::clone(&active_prompt);
         let lis2 = Arc::clone(&listening);
@@ -111,7 +115,7 @@ fn main() {
                 .enable_all()
                 .build()
                 .expect("tokio runtime");
-            rt.block_on(run_pipeline(ui_tx, query_rx, lis2, kb2, ss2, ap2, session_id));
+            rt.block_on(run_pipeline(ui_tx, query_rx, lis2, kb2, brain2, ss2, ap2, session_id));
         });
     }
 
@@ -892,15 +896,15 @@ fn build_settings_content(page: &GBox) {
     // ── Prompt mode ───────────────────────────────────────────────────────
     append_section_title(&content, "Prompt Mode");
 
-    for id in list_prompts() {
+    for (id, desc) in list_all_prompts() {
         let row = GBox::new(Orientation::Vertical, 2);
         row.add_css_class("prompt-row");
 
-        let t = Label::new(Some(&prompt_label_for(id)));
+        let t = Label::new(Some(&prompt_label_for(&id)));
         t.add_css_class("prompt-title");
         t.set_halign(Align::Start);
 
-        let d = Label::new(Some(prompt_description(id)));
+        let d = Label::new(Some(&desc));
         d.add_css_class("prompt-desc");
         d.set_halign(Align::Start);
         d.set_wrap(true);
@@ -1148,6 +1152,7 @@ async fn run_pipeline(
     mut query_rx: mpsc::Receiver<String>,
     listening: Arc<AtomicBool>,
     kb: Arc<KnowledgeBase>,
+    brain: Arc<BrainStore>,
     session_store: Arc<SessionStore>,
     active_prompt: Arc<Mutex<String>>,
     session_id: i64,
@@ -1172,7 +1177,9 @@ async fn run_pipeline(
         model: config.provider.model.clone(),
     };
 
-    let ctx = Arc::new(ContextEngine::new(Arc::clone(&kb), config.rag.clone()));
+    let ctx = Arc::new(
+        ContextEngine::new(Arc::clone(&kb), config.rag.clone()).with_brain(brain),
+    );
 
     // TTS engine (lazy-started on first use)
     let tts: Option<Arc<TtsEngine>> = if config.tts.enabled {
@@ -1272,11 +1279,11 @@ async fn run_pipeline(
                 } else { q };
 
                 let prompt_name = active_prompt.lock().unwrap().clone();
-                let system_prompt = get_prompt(&prompt_name).to_string();
+                let system_prompt = resolve_prompt(&prompt_name);
 
                 send!(UiMsg::Status("Thinking…".into()));
 
-                let msgs = match ctx.build_prompt(&query, &recent, &chat_history, &system_prompt).await {
+                let msgs = match ctx.build_prompt_with_category(&query, &recent, &chat_history, &system_prompt, Some(&prompt_name)).await {
                     Ok(m) => m,
                     Err(e) => { send!(UiMsg::Error(format!("Context: {e}"))); continue; }
                 };

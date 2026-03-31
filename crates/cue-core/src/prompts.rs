@@ -1,4 +1,6 @@
-/// Built-in system prompt templates
+/// Built-in system prompt templates + custom prompt support
+
+use crate::brain;
 
 const GENERAL: &str = r#"You are a helpful, concise assistant in a real-time meeting context.
 
@@ -70,6 +72,7 @@ Guidelines:
 - SPIN selling: Situation → Problem → Implication → Need-payoff"#;
 
 /// Get a built-in prompt by name. Returns GENERAL if name not found.
+/// Also checks custom prompts from ~/.config/cue/prompts/
 pub fn get_prompt(name: &str) -> &'static str {
     match name {
         "general" => GENERAL,
@@ -82,9 +85,41 @@ pub fn get_prompt(name: &str) -> &'static str {
     }
 }
 
+/// Get prompt content by name, checking custom prompts first, then built-ins.
+/// Returns owned String since custom prompts are loaded from disk.
+pub fn resolve_prompt(name: &str) -> String {
+    // Check custom prompts first
+    if let Ok(custom) = brain::load_custom_prompts() {
+        if let Some(p) = custom.iter().find(|p| p.name == name) {
+            return p.content.clone();
+        }
+    }
+    // Fall back to built-in
+    get_prompt(name).to_string()
+}
+
 /// List all built-in prompt names
 pub fn list_prompts() -> Vec<&'static str> {
     vec!["general", "coding", "behavioral", "system_design", "meeting", "sales"]
+}
+
+/// List all prompts (built-in + custom) with name and description
+pub fn list_all_prompts() -> Vec<(String, String)> {
+    let mut result: Vec<(String, String)> = list_prompts()
+        .iter()
+        .map(|name| (name.to_string(), prompt_description(name).to_string()))
+        .collect();
+
+    if let Ok(custom) = brain::load_custom_prompts() {
+        for p in custom {
+            // Skip if name conflicts with built-in
+            if !result.iter().any(|(n, _)| n == &p.name) {
+                result.push((p.name, p.description));
+            }
+        }
+    }
+
+    result
 }
 
 /// Get a short description of each prompt

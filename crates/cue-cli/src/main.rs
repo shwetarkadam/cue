@@ -5,6 +5,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
     ask::AskArgs,
+    brain::BrainArgs,
     config_cmd::ConfigArgs,
     history::HistoryArgs,
     kb::KbArgs,
@@ -48,6 +49,9 @@ enum Commands {
     /// Manage the knowledge base
     Kb(KbArgs),
 
+    /// Manage your brain (folders, notes, custom prompts)
+    Brain(BrainArgs),
+
     /// View session history
     History(HistoryArgs),
 
@@ -88,6 +92,7 @@ async fn main() -> Result<()> {
         Commands::Listen => commands::listen::run().await,
         Commands::Load(args) => commands::load::run(args),
         Commands::Kb(args) => commands::kb::run(args),
+        Commands::Brain(args) => commands::brain::run(args),
         Commands::History(args) => commands::history::run(args),
         Commands::Providers(args) => commands::providers::run(args).await,
         Commands::Prompts(args) => commands::prompts::run(args),

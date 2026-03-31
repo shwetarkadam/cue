@@ -12,7 +12,7 @@ async-trait.workspace = true
 futures.workspace = true
 cpal.workspace = true
 rubato.workspace = true
-whisper-rs.workspace = true
+whisper-rs = { workspace = true, optional = true }
 reqwest.workspace = true
 eventsource-stream.workspace = true
 serde.workspace = true
@@ -36,3 +36,7 @@ notify-rust.workspace = true
 tokio-tungstenite.workspace = true
 url.workspace = true
 ort.workspace = true
+
+[features]
+default = []
+whisper = ["dep:whisper-rs"]

@@ -1,12 +1,13 @@
 use anyhow::Result;
 use clap::Args;
 use cue_core::{
+    brain::BrainStore,
     config::Config,
     context::ContextEngine,
     kb::KnowledgeBase,
     llm::{self, CompletionConfig},
     output::build_output,
-    prompts::get_prompt,
+    prompts::resolve_prompt,
     session::SessionStore,
 };
 use futures::StreamExt;
@@ -62,11 +63,15 @@ pub async fn run(args: AskArgs) -> Result<()> {
         config.rag.transcript_window_secs,
     )?;
 
-    let context_engine = ContextEngine::new(Arc::clone(&kb), config.rag.clone());
-    let system_prompt = get_prompt(&args.prompt);
+    let brain = Arc::new(BrainStore::new(&db_path)?);
+    brain.init_schema()?;
+
+    let context_engine =
+        ContextEngine::new(Arc::clone(&kb), config.rag.clone()).with_brain(brain);
+    let system_prompt = resolve_prompt(&args.prompt);
 
     let messages = context_engine
-        .build_prompt(&args.query, &transcript, system_prompt)
+        .build_prompt(&args.query, &transcript, &[], &system_prompt)
         .await?;
 
     let router = llm::build_router(&config.provider)?;

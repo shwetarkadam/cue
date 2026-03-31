@@ -106,7 +106,7 @@ async fn handle_client(mut stream: UnixStream, state: DaemonState) -> Result<()>
 
                 let messages = match state
                     .context_engine
-                    .build_prompt(&query, &transcript, &state.system_prompt)
+                    .build_prompt(&query, &transcript, &[], &state.system_prompt)
                     .await
                 {
                     Ok(m) => m,

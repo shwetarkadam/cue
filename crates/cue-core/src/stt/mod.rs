@@ -5,16 +5,20 @@ pub use parakeet::ParakeetStreamer;
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+#[cfg(feature = "whisper")]
+use tracing::debug;
+use tracing::info;
 
 use crate::config::SttConfig;
 
 /// The whisper STT engine, wrapping whisper-rs
+#[cfg(feature = "whisper")]
 pub struct SttEngine {
     ctx: whisper_rs::WhisperContext,
     config: SttConfig,
 }
 
+#[cfg(feature = "whisper")]
 impl SttEngine {
     /// Create a new STT engine. The model file must exist at models_dir/ggml-{name}.bin.
     pub fn new(config: &SttConfig, models_dir: &Path) -> Result<Self> {
@@ -91,8 +95,28 @@ impl SttEngine {
     }
 }
 
+/// Stub SttEngine when whisper feature is not enabled
+#[cfg(not(feature = "whisper"))]
+pub struct SttEngine;
+
+#[cfg(not(feature = "whisper"))]
+impl SttEngine {
+    pub fn new(_config: &SttConfig, _models_dir: &Path) -> Result<Self> {
+        anyhow::bail!("Whisper support not compiled. Build with --features whisper")
+    }
+
+    pub fn transcribe(&self, _samples: &[f32]) -> Result<String> {
+        anyhow::bail!("Whisper support not compiled")
+    }
+
+    pub fn model_path(model_name: &str, models_dir: &Path) -> PathBuf {
+        models_dir.join(format!("ggml-{}.bin", model_name))
+    }
+}
+
 /// Filter out whisper special tokens like [Bell], [Music], [_BEL_], (Bell) etc.
 /// These appear when whisper hallucinates on silence or background noise.
+#[cfg(feature = "whisper")]
 fn filter_special_tokens(text: &str) -> String {
     // Whisper special tokens that indicate noise/silence, not real speech
     let noise_tokens = [
@@ -112,6 +136,7 @@ fn filter_special_tokens(text: &str) -> String {
     result.trim().to_string()
 }
 
+#[cfg(feature = "whisper")]
 fn regex_filter_brackets(text: &str) -> String {
     // Simple bracket filter without regex dependency:
     // Remove [Word] and (Word) patterns where content starts with uppercase (whisper special tokens)

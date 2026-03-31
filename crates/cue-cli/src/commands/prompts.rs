@@ -28,24 +28,39 @@ pub fn run(args: PromptsArgs) -> Result<()> {
     match args.command {
         PromptsCommands::List => {
             println!("Available prompts:\n");
+            println!("  Built-in:");
             for name in prompts::list_prompts() {
-                println!("  {:<20} {}", name, prompts::prompt_description(name));
+                println!("    {:<20} {}", name, prompts::prompt_description(name));
             }
+
+            let all = prompts::list_all_prompts();
+            let custom: Vec<_> = all
+                .iter()
+                .filter(|(name, _)| !prompts::list_prompts().contains(&name.as_str()))
+                .collect();
+            if !custom.is_empty() {
+                println!("\n  Custom:");
+                for (name, desc) in custom {
+                    println!("    {:<20} {}", name, desc);
+                }
+            }
+
             println!("\nUsage: cue start --prompt <name>");
+            println!("Create custom: cue brain prompt create <name> <content>");
         }
         PromptsCommands::Show { name } => {
-            let content = prompts::get_prompt(&name);
+            let content = prompts::resolve_prompt(&name);
             println!("=== Prompt: {} ===\n", name);
             println!("{}", content);
         }
         PromptsCommands::Use { name } => {
-            // Validate
-            let valid = prompts::list_prompts();
-            if !valid.contains(&name.as_str()) {
+            let all = prompts::list_all_prompts();
+            if !all.iter().any(|(n, _)| n == &name) {
+                let names: Vec<_> = all.iter().map(|(n, _)| n.as_str()).collect();
                 println!(
                     "Unknown prompt '{}'. Available: {}",
                     name,
-                    valid.join(", ")
+                    names.join(", ")
                 );
                 return Ok(());
             }

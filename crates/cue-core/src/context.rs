@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use tracing::debug;
 
+use crate::brain::BrainStore;
 use crate::config::RagConfig;
 use crate::kb::KnowledgeBase;
 use crate::llm::Message;
@@ -13,18 +14,28 @@ fn approx_tokens(s: &str) -> usize {
 }
 
 /// Context engine — assembles the LLM prompt from:
-/// 1. System prompt
+/// 1. System prompt + brain context (notes + folder docs)
 /// 2. KB context (RAG retrieval)
 /// 3. Recent transcript window
 /// 4. User query
 pub struct ContextEngine {
     kb: Arc<KnowledgeBase>,
+    brain: Option<Arc<BrainStore>>,
     config: RagConfig,
 }
 
 impl ContextEngine {
     pub fn new(kb: Arc<KnowledgeBase>, config: RagConfig) -> Self {
-        Self { kb, config }
+        Self {
+            kb,
+            brain: None,
+            config,
+        }
+    }
+
+    pub fn with_brain(mut self, brain: Arc<BrainStore>) -> Self {
+        self.brain = Some(brain);
+        self
     }
 
     /// Build the full message list for the LLM.
@@ -36,14 +47,51 @@ impl ContextEngine {
         chat_history: &[(String, String)],
         system_prompt: &str,
     ) -> Result<Vec<Message>> {
+        self.build_prompt_with_category(query, transcript, chat_history, system_prompt, None)
+            .await
+    }
+
+    /// Build prompt with brain context for a specific prompt category.
+    pub async fn build_prompt_with_category(
+        &self,
+        query: &str,
+        transcript: &[TranscriptEntry],
+        chat_history: &[(String, String)],
+        system_prompt: &str,
+        prompt_category: Option<&str>,
+    ) -> Result<Vec<Message>> {
         // Token budget: 1500 tokens ≈ 6000 characters
         const TOKEN_BUDGET: usize = 6000;
         let mut budget = TOKEN_BUDGET;
 
         let mut messages = Vec::new();
 
-        // 1. System message
-        let system_msg = system_prompt.to_string();
+        // 1. System message — enriched with brain notes + folder docs
+        let mut system_msg = system_prompt.to_string();
+
+        if let (Some(brain), Some(category)) = (&self.brain, prompt_category) {
+            // Inject notes for this category
+            if let Ok(Some(note)) = brain.get_note_for_prompt(category) {
+                system_msg.push_str("\n\n## Your Notes\n\n");
+                system_msg.push_str(&note);
+            }
+
+            // Inject brain folder documents linked to this prompt
+            if let Ok(docs) = brain.get_context_for_prompt(category) {
+                if !docs.is_empty() {
+                    system_msg.push_str("\n\n## Your Brain (reference material)\n\n");
+                    for doc in &docs {
+                        let section = format!("### {}\n{}\n\n", doc.name, doc.content);
+                        if approx_tokens(&system_msg) + approx_tokens(&section) > TOKEN_BUDGET / 3
+                        {
+                            break;
+                        }
+                        system_msg.push_str(&section);
+                    }
+                }
+            }
+        }
+
         budget = budget.saturating_sub(approx_tokens(&system_msg));
         messages.push(Message::system(system_msg));
 

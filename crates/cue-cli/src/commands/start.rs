@@ -4,12 +4,13 @@ use clap::Args;
 use cue_core::audio::SystemAudioCapture;
 use cue_core::{
     audio::{AudioCapture, Utterance},
+    brain::BrainStore,
     config::Config,
     context::ContextEngine,
     kb::KnowledgeBase,
     llm::{self, CompletionConfig},
     output::{build_output, MultiOutput, NotifyOutput, OutputSink, TuiEvent, TuiOutput},
-    prompts::get_prompt,
+    prompts::resolve_prompt,
     session::{SessionStore, TranscriptEntry},
     stealth,
     stt::{DeepgramStreamer, SttEngine},
@@ -156,10 +157,16 @@ pub async fn run(args: StartArgs) -> Result<()> {
         model: config.provider.model.clone(),
     };
 
-    // Build context engine
-    let context_engine = Arc::new(ContextEngine::new(Arc::clone(&kb), config.rag.clone()));
+    // Build brain store
+    let brain = Arc::new(BrainStore::new(&db_path)?);
+    brain.init_schema()?;
 
-    let system_prompt = get_prompt(&args.prompt).to_string();
+    // Build context engine with brain integration
+    let context_engine = Arc::new(
+        ContextEngine::new(Arc::clone(&kb), config.rag.clone()).with_brain(Arc::clone(&brain)),
+    );
+
+    let system_prompt = resolve_prompt(&args.prompt);
 
     // Channel for utterances from audio capture
     let (utterance_tx, mut utterance_rx) = mpsc::channel::<Utterance>(16);
@@ -279,8 +286,10 @@ pub async fn run(args: StartArgs) -> Result<()> {
 
         // Start Deepgram streamer
         let streamer = DeepgramStreamer::new(deepgram_key);
+        let (stt_event_tx, _stt_event_rx) = mpsc::channel::<cue_core::stt::SttEvent>(64);
         tokio::spawn(async move {
-            if let Err(e) = streamer.run(dg_utterance_rx, transcript_tx_dg, session_id).await {
+            let mut rx = dg_utterance_rx;
+            if let Err(e) = streamer.run(&mut rx, transcript_tx_dg, stt_event_tx, session_id).await {
                 error!(error = %e, "Deepgram streamer error");
             }
         });
@@ -625,7 +634,7 @@ async fn trigger_llm(
     output.emit_status("Thinking...").await;
 
     let messages = match context_engine
-        .build_prompt(query, transcript, system_prompt)
+        .build_prompt(query, transcript, &[], system_prompt)
         .await
     {
         Ok(m) => m,
