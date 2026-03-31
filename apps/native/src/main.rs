@@ -602,7 +602,60 @@ fn build_window(
     ));
 
     window.present();
+
+    #[cfg(target_os = "macos")]
+    hide_from_screen_share();
 }
+
+#[cfg(target_os = "macos")]
+fn hide_from_screen_share() {
+    use cocoa::appkit::NSApp;
+    use cocoa::base::id;
+    use cocoa::foundation::NSArray;
+
+    unsafe {
+        let app: id = NSApp();
+        if app.is_null() {
+            return;
+        }
+        let windows: id = msg_send![app, windows];
+        if windows.is_null() {
+            return;
+        }
+        let count: usize = NSArray::count(windows);
+        for i in 0..count {
+            let win: id = NSArray::objectAtIndex(windows, i);
+            let _: () = msg_send![win, setSharingType:00i64]; // NSWindowSharingNone = 0
+        }
+    }
+}
+
+}
+
+#[cfg(target_os = "macos")]
+fn hide_from_screen_share() {
+    use cocoa::appkit::NSApp;
+    use cocoa::base::id;
+    use cocoa::foundation::NSArray;
+
+    unsafe {
+        let app: id = NSApp();
+        if app.is_null() {
+            return;
+        }
+        let windows: id = msg_send![app, windows];
+        if windows.is_null() {
+            return;
+        }
+        let count: usize = msg_send![windows, count];
+        for i in 0..count {
+            let win: id = msg_send![windows, objectAtIndex: i];
+            let _: () = msg_send![win, setSharingType: 0i64]; // NSWindowSharingNone = 0
+        }
+    }
+}
+
+
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
 
@@ -915,10 +968,101 @@ fn build_settings_content(page: &GBox) {
         content.append(&row);
     }
 
+    // ── Brain ───────────────────────────────────────────────────────────────────
+    append_section_title(&content, "Brain");
+
+    let db = Config::db_path();
+    if let Ok(brain) = BrainStore::new(&db) {
+        let _ = brain.init_schema();
+
+        let brain_box = GBox::new(Orientation::Vertical, 6);
+        brain_box.add_css_class("brain-section");
+
+        match brain.list_folders() {
+            Ok(folders) if folders.is_empty() => {
+                let empty = Label::new(Some("No brain folders yet. Use CLI:"));
+                empty.add_css_class("brain-empty");
+                empty.set_halign(Align::Start);
+                empty.set_wrap(true);
+                brain_box.append(&empty);
+
+                let cmd = Label::new(Some("cue brain create <name> --link <prompt>"));
+                cmd.add_css_class("code-block");
+                cmd.set_halign(Align::Start);
+                cmd.set_xalign(0.0);
+                cmd.set_selectable(true);
+                brain_box.append(&cmd);
+            }
+            Ok(folders) => {
+                for f in &folders {
+                    let row = GBox::new(Orientation::Vertical, 2);
+                    row.add_css_class("brain-folder-row");
+
+                    let name_lbl = Label::new(Some(&f.name));
+                    name_lbl.add_css_class("brain-folder-name");
+                    name_lbl.set_halign(Align::Start);
+                    row.append(&name_lbl);
+
+                    if let Ok(docs) = brain.list_documents(&f.name) {
+                        if !docs.is_empty() {
+                            let doc_lbl = Label::new(Some(&format!("{} doc(s)", docs.len())));
+                            doc_lbl.add_css_class("brain-doc-name");
+                            doc_lbl.set_halign(Align::Start);
+                            row.append(&doc_lbl);
+                        }
+                    }
+
+                    if let Some(ref lp) = f.linked_prompt {
+                        let link_lbl = Label::new(Some(&format!("Linked: {}", lp)));
+                        link_lbl.add_css_class("brain-folder-link");
+                        link_lbl.set_halign(Align::Start);
+                        row.append(&link_lbl);
+                    }
+
+                    brain_box.append(&row);
+                }
+
+                let count = Label::new(Some(&format!("{} folder(s) total", folders.len())));
+                count.add_css_class("brain-folder-link");
+                count.set_halign(Align::Start);
+                brain_box.append(&count);
+            }
+            Err(_) => {
+                let err = Label::new(Some("Could not load brain data"));
+                err.add_css_class("brain-empty");
+                err.set_halign(Align::Start);
+                brain_box.append(&err);
+            }
+        }
+
+        match brain.list_notes() {
+            Ok(notes) if !notes.is_empty() => {
+                let notes_title = Label::new(Some("Notes:"));
+                notes_title.add_css_class("brain-folder-name");
+                notes_title.set_halign(Align::Start);
+                notes_title.set_margin_top(4);
+                brain_box.append(&notes_title);
+
+                for n in &notes {
+                    let note_text = format!("[{}] {}", n.category, n.content);
+                    let note_lbl = Label::new(Some(&note_text));
+                    note_lbl.add_css_class("brain-note-text");
+                    note_lbl.set_halign(Align::Start);
+                    note_lbl.set_wrap(true);
+                    note_lbl.set_xalign(0.0);
+                    brain_box.append(&note_lbl);
+                }
+            }
+            _ => {}
+        }
+
+        content.append(&brain_box);
+    }
+
     // ── API Keys ──────────────────────────────────────────────────────────
     append_section_title(&content, "API Keys");
 
-    let hint = Label::new(Some("Saved to ~/.config/cue/.env — restart to apply"));
+    let hint = Label::new(Some("Saved to ~/.config/cue/.env \u{2014} restart to apply"));
     hint.add_css_class("settings-label");
     hint.set_halign(Align::Start);
     hint.set_wrap(true);
@@ -927,6 +1071,7 @@ fn build_settings_content(page: &GBox) {
     for (label_text, env_var) in &[
         ("Anthropic", "ANTHROPIC_API_KEY"),
         ("OpenAI", "OPENAI_API_KEY"),
+        ("OpenRouter", "OPENROUTER_API_KEY"),
         ("Deepgram (STT)", "DEEPGRAM_API_KEY"),
         ("Groq", "GROQ_API_KEY"),
     ] {
