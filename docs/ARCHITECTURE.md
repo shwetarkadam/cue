@@ -32,7 +32,8 @@ cue/
 │   │       │   ├── embed.rs        # ONNX embedding (all-MiniLM-L6-v2)
 │   │       │   ├── chunk.rs        # document chunking
 │   │       │   └── ingest.rs       # PDF, Markdown, TXT parsers
-│   │       ├── context.rs          # prompt assembly: sys + RAG + transcript + query
+│   │       ├── brain.rs            # brain folders, documents, notes, prompter notes, custom prompts
+│   │       ├── context.rs          # prompt assembly: sys + brain + RAG + transcript + query
 │   │       ├── session.rs          # SQLite session/transcript/exchange storage
 │   │       ├── output/
 │   │       │   ├── mod.rs          # OutputSink trait
@@ -63,6 +64,12 @@ cue/
 │               ├── devices.rs      # cue devices
 │               ├── models.rs       # cue models list/download
 │               └── config.rs       # cue config / config edit
+│
+├── apps/
+│   ├── native/             # GTK4 glassmorphic overlay
+│   └── overlay/            # Tauri + React overlay (chat, settings, prompter)
+│       ├── src-tauri/      # Rust backend: pipeline, Tauri commands
+│       └── src/            # React frontend: App.tsx, index.css
 │
 ├── prompts/                # default system prompt templates (compiled via include_str!)
 │   ├── coding.toml
@@ -150,8 +157,9 @@ cue/
     │
     │ Trigger? (hotkey / auto / manual)
     │ If triggered:
-    │   1. retrieve top-k from KB (sqlite-vec cosine search)
-    │   2. build prompt: system + KB context + transcript window + query
+    │   1. enrich system prompt with brain notes + folder docs
+    │   2. retrieve top-k from KB (FTS5 / sqlite-vec cosine search)
+    │   3. build prompt: system + brain + KB context + transcript window + query
     ▼
 [LLM Router]
     │

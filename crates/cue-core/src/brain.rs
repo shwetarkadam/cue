@@ -35,6 +35,17 @@ pub struct BrainNote {
 }
 
 #[derive(Debug, Clone)]
+pub struct PrompterNote {
+    pub id: i64,
+    pub title: String,
+    pub content: String,
+    pub sort_order: i64,
+    pub prompt_category: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct CustomPrompt {
     pub name: String,
     pub description: String,
@@ -80,6 +91,16 @@ impl BrainStore {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 category TEXT NOT NULL UNIQUE,
                 content TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS prompter_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                prompt_category TEXT NOT NULL DEFAULT 'general',
+                created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
             "#,
@@ -346,6 +367,112 @@ impl BrainStore {
     /// Get note content for a prompt category (used during context assembly)
     pub fn get_note_for_prompt(&self, prompt_name: &str) -> Result<Option<String>> {
         Ok(self.get_note(prompt_name)?.map(|n| n.content))
+    }
+
+    // ── Prompter Notes ──────────────────────────────────────────────────
+
+    pub fn add_prompter_note(
+        &self,
+        title: &str,
+        content: &str,
+        prompt_category: &str,
+    ) -> Result<PrompterNote> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let max_order: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) FROM prompter_notes WHERE prompt_category = ?1",
+                params![prompt_category],
+                |row| row.get(0),
+            )
+            .unwrap_or(-1);
+        conn.execute(
+            "INSERT INTO prompter_notes (title, content, sort_order, prompt_category, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![title, content, max_order + 1, prompt_category, now, now],
+        )?;
+        let id = conn.last_insert_rowid();
+        info!(id, title, "Prompter note added");
+        Ok(PrompterNote {
+            id,
+            title: title.to_string(),
+            content: content.to_string(),
+            sort_order: max_order + 1,
+            prompt_category: prompt_category.to_string(),
+            created_at: now.clone(),
+            updated_at: now,
+        })
+    }
+
+    pub fn update_prompter_note(
+        &self,
+        id: i64,
+        title: &str,
+        content: &str,
+    ) -> Result<PrompterNote> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let affected = conn.execute(
+            "UPDATE prompter_notes SET title = ?1, content = ?2, updated_at = ?3 WHERE id = ?4",
+            params![title, content, now, id],
+        )?;
+        if affected == 0 {
+            anyhow::bail!("Prompter note {} not found", id);
+        }
+        let mut stmt = conn.prepare(
+            "SELECT id, title, content, sort_order, prompt_category, created_at, updated_at FROM prompter_notes WHERE id = ?1",
+        )?;
+        let note = stmt.query_row(params![id], |row| {
+            Ok(PrompterNote {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                content: row.get(2)?,
+                sort_order: row.get(3)?,
+                prompt_category: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+        Ok(note)
+    }
+
+    pub fn delete_prompter_note(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn.execute("DELETE FROM prompter_notes WHERE id = ?1", params![id])?;
+        if affected == 0 {
+            anyhow::bail!("Prompter note {} not found", id);
+        }
+        info!(id, "Prompter note deleted");
+        Ok(())
+    }
+
+    pub fn list_prompter_notes(&self, prompt_category: &str) -> Result<Vec<PrompterNote>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, title, content, sort_order, prompt_category, created_at, updated_at FROM prompter_notes WHERE prompt_category = ?1 ORDER BY sort_order ASC",
+        )?;
+        let rows = stmt.query_map(params![prompt_category], |row| {
+            Ok(PrompterNote {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                content: row.get(2)?,
+                sort_order: row.get(3)?,
+                prompt_category: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn reorder_prompter_notes(&self, ids: &[i64]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        for (i, id) in ids.iter().enumerate() {
+            conn.execute(
+                "UPDATE prompter_notes SET sort_order = ?1 WHERE id = ?2",
+                params![i as i64, id],
+            )?;
+        }
+        Ok(())
     }
 }
 

@@ -1,6 +1,6 @@
 # Cue — Complete Project State
 
-> Last updated: 2026-03-31
+> Last updated: 2026-04-01
 
 This document captures the full state of the Cue project — architecture, features, what's done, what's remaining, and how to build on any platform. Designed to be self-sufficient: drop this into a new session and the LLM has full context.
 
@@ -106,7 +106,7 @@ cue/
 │   │
 │   └── overlay/                  # Tauri web overlay (alternative)
 │       ├── src-tauri/
-│       └── src/                  # Svelte frontend
+│       └── src/                  # React + Tailwind frontend
 │
 └── docs/
     ├── OVERVIEW.md               # Philosophy & use cases
@@ -202,6 +202,37 @@ cue/
 | STT cascade | Done | Parakeet → Deepgram → manual |
 | TTS (KittenTTS) | Done | Optional, background thread |
 
+### Tauri Web Overlay — DONE
+
+| Feature | Status | Notes |
+|---|---|---|
+| React + Tailwind glassmorphic UI | Done | Chat, settings, prompter views |
+| Deepgram STT (cloud) | Done | WebSocket streaming via overlay pipeline |
+| Chat + conversation history | Done | Real-time streaming with scroll |
+| Settings (Prompt, Keys, Model, KB, Brain, Setup) | Done | Full configuration |
+| Brain UI | Done | Notes CRUD + folder management in settings |
+| Brain context injection | Done | ContextEngine.with_brain(), build_prompt_with_category |
+| **Prompter (teleprompter)** | Done | Cue cards with auto-scroll while speaking |
+| Prompter notes CRUD | Done | Add, edit, delete, reorder per prompt category |
+| Prompter keyboard nav | Done | Arrow keys, j/k, Home/End, Space (toggle scroll), Escape |
+| Prompter auto-advance | Done | Cards advance every 8s while listening, toggleable |
+| Compact transcript in prompter | Done | Last 3 lines visible while presenting |
+| AI query from prompter | Done | Input bar + last response preview |
+| Hyprland auto-rules | Done | Float, pin, noscreencast on setup |
+
+### Prompter Feature (NEW — 2026-04-01)
+
+The Prompter is a teleprompter-style view for presenting while receiving AI assistance:
+
+- **Cue cards**: Individual notes with optional title, displayed at 15px for easy reading
+- **Per-prompt scoping**: Cards are stored per prompt category (coding, meeting, etc.)
+- **Auto-scroll**: Cards advance automatically every 8 seconds while mic is active
+- **Keyboard navigation**: `↑`/`↓` or `j`/`k` to navigate, `Home`/`End` to jump, `Space` to toggle auto-scroll, `Escape` to exit
+- **Active card highlighting**: Current card gets an accent glow when listening
+- **Inline editing**: Add, edit, delete, and reorder cards directly in the prompter
+- **Persistent storage**: Cards stored in SQLite `prompter_notes` table via BrainStore
+- **Compact overlay**: Transcript strip + AI input + response preview at bottom
+
 ---
 
 ## STT Architecture — Important
@@ -254,6 +285,9 @@ chunks_fts (FTS5 virtual table)
 brain_folders (id, name, linked_prompt, created_at)
 brain_documents (id, folder_id, name, content, created_at)
 brain_notes (id, category, content, updated_at)
+
+-- Prompter
+prompter_notes (id, title, content, sort_order, prompt_category, created_at, updated_at)
 
 -- Migrations
 schema_version (version, description, applied_at)
@@ -502,7 +536,8 @@ GTK4 thread:     GLib main loop (native app only)
 | Fix whisper-rs or replace | Medium | v0.12 incompatible with system whisper.cpp; options: pin version, use candle, or drop in favor of Parakeet |
 | Silero VAD (ONNX) | Medium | Better voice detection than energy gate; use ort crate (already a dep) |
 | Auto-session titles | Small | Send first 3 transcript entries to LLM for title generation |
-| Brain UI in GTK overlay | Medium | Settings panel section for viewing/editing brain folders and notes |
+| Brain UI in GTK overlay | Medium | Settings panel section for viewing/editing brain folders and notes (done in Tauri overlay) |
+| Parakeet in Tauri overlay | Small | Currently Deepgram only; add Parakeet cascade like native app |
 
 ### Medium Priority
 
@@ -538,6 +573,9 @@ GTK4 thread:     GLib main loop (native app only)
 | 2026-03-31 | Parakeet as primary STT | Local, no API key, good quality |
 | 2026-03-31 | Brain feature added | Folder-based knowledge + notes + custom prompts |
 | 2026-03-31 | Schema migration system | Version-tracked DB changes |
+| 2026-04-01 | Prompter feature added | Teleprompter cue cards with auto-scroll + keyboard nav |
+| 2026-04-01 | Brain UI in Tauri overlay | Notes + folders CRUD in settings; brain wired into context |
+| 2026-04-01 | Tauri overlay brain context | ContextEngine.with_brain() + build_prompt_with_category |
 
 ---
 
@@ -570,6 +608,16 @@ echo 'DEEPGRAM_API_KEY=...' >> ~/.config/cue/.env
 # OR for native overlay:
 cargo build --release -p cue-native && ./target/release/cue-native
 ```
+
+---
+
+## Files Modified in Prompter + Brain UI Feature (2026-04-01)
+
+**Modified files:**
+- `crates/cue-core/src/brain.rs` — Added PrompterNote struct, prompter_notes table, CRUD methods
+- `apps/overlay/src-tauri/src/lib.rs` — Added BrainStore to AppState, brain + prompter Tauri commands, brain context wiring
+- `apps/overlay/src/App.tsx` — Added prompter view, brain settings tab, keyboard navigation
+- `apps/overlay/src/index.css` — Added prompter card styles, active-card glow, textarea support
 
 ---
 

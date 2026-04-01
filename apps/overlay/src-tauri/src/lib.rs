@@ -5,6 +5,7 @@ use std::sync::{
 
 use cue_core::{
     audio::{AudioCapture, Utterance},
+    brain::{BrainStore, BrainNote, BrainFolder, PrompterNote},
     config::Config,
     context::ContextEngine,
     kb::KnowledgeBase,
@@ -25,6 +26,7 @@ pub struct AppState {
     pub listening: Arc<AtomicBool>,
     pub query_tx: mpsc::Sender<String>,
     pub kb: Arc<KnowledgeBase>,
+    pub brain: Arc<BrainStore>,
     pub session_store: Arc<SessionStore>,
     pub active_prompt: Arc<Mutex<String>>,
     pub session_id: i64,
@@ -203,6 +205,147 @@ async fn ingest_kb_file(path: String, state: State<'_, AppState>) -> Result<KbDo
         .map_err(|e| e.to_string())
 }
 
+// ── Prompter note commands ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PrompterNotePayload {
+    pub id: i64,
+    pub title: String,
+    pub content: String,
+    pub sort_order: i64,
+    pub prompt_category: String,
+}
+
+impl From<PrompterNote> for PrompterNotePayload {
+    fn from(n: PrompterNote) -> Self {
+        Self {
+            id: n.id,
+            title: n.title,
+            content: n.content,
+            sort_order: n.sort_order,
+            prompt_category: n.prompt_category,
+        }
+    }
+}
+
+#[tauri::command]
+async fn list_prompter_notes(category: String, state: State<'_, AppState>) -> Result<Vec<PrompterNotePayload>, String> {
+    state
+        .brain
+        .list_prompter_notes(&category)
+        .map(|v| v.into_iter().map(PrompterNotePayload::from).collect())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn add_prompter_note(
+    title: String,
+    content: String,
+    category: String,
+    state: State<'_, AppState>,
+) -> Result<PrompterNotePayload, String> {
+    state
+        .brain
+        .add_prompter_note(&title, &content, &category)
+        .map(PrompterNotePayload::from)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn update_prompter_note(
+    id: i64,
+    title: String,
+    content: String,
+    state: State<'_, AppState>,
+) -> Result<PrompterNotePayload, String> {
+    state
+        .brain
+        .update_prompter_note(id, &title, &content)
+        .map(PrompterNotePayload::from)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_prompter_note(id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    state.brain.delete_prompter_note(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn reorder_prompter_notes(ids: Vec<i64>, state: State<'_, AppState>) -> Result<(), String> {
+    state.brain.reorder_prompter_notes(&ids).map_err(|e| e.to_string())
+}
+
+// ── Brain note commands ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BrainNotePayload {
+    pub id: i64,
+    pub category: String,
+    pub content: String,
+}
+
+impl From<BrainNote> for BrainNotePayload {
+    fn from(n: BrainNote) -> Self {
+        Self { id: n.id, category: n.category, content: n.content }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BrainFolderPayload {
+    pub id: i64,
+    pub name: String,
+    pub linked_prompt: Option<String>,
+    pub doc_count: usize,
+}
+
+#[tauri::command]
+async fn list_brain_notes(state: State<'_, AppState>) -> Result<Vec<BrainNotePayload>, String> {
+    state.brain.list_notes()
+        .map(|v| v.into_iter().map(BrainNotePayload::from).collect())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_brain_note(category: String, content: String, state: State<'_, AppState>) -> Result<BrainNotePayload, String> {
+    state.brain.set_note(&category, &content)
+        .map(BrainNotePayload::from)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_brain_note(category: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.brain.remove_note(&category).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_brain_folders(state: State<'_, AppState>) -> Result<Vec<BrainFolderPayload>, String> {
+    let folders = state.brain.list_folders().map_err(|e| e.to_string())?;
+    let mut result = Vec::new();
+    for f in folders {
+        let doc_count = state.brain.list_documents(&f.name)
+            .map(|d| d.len())
+            .unwrap_or(0);
+        result.push(BrainFolderPayload {
+            id: f.id,
+            name: f.name,
+            linked_prompt: f.linked_prompt,
+            doc_count,
+        });
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+async fn create_brain_folder(name: String, linked_prompt: Option<String>, state: State<'_, AppState>) -> Result<BrainFolderPayload, String> {
+    let f = state.brain.create_folder(&name, linked_prompt.as_deref()).map_err(|e| e.to_string())?;
+    Ok(BrainFolderPayload { id: f.id, name: f.name, linked_prompt: f.linked_prompt, doc_count: 0 })
+}
+
+#[tauri::command]
+async fn delete_brain_folder(name: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.brain.remove_folder(&name).map_err(|e| e.to_string())
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn prompt_label(id: &str) -> String {
@@ -232,6 +375,7 @@ async fn run_pipeline(
     mut query_rx: mpsc::Receiver<String>,
     listening: Arc<AtomicBool>,
     kb: Arc<KnowledgeBase>,
+    brain: Arc<BrainStore>,
     session_store: Arc<SessionStore>,
     active_prompt: Arc<Mutex<String>>,
     session_id: i64,
@@ -250,7 +394,10 @@ async fn run_pipeline(
         max_tokens: config.provider.max_tokens,
         model: config.provider.model.clone(),
     };
-    let ctx = Arc::new(ContextEngine::new(Arc::clone(&kb), config.rag.clone()));
+    let ctx = Arc::new(
+        ContextEngine::new(Arc::clone(&kb), config.rag.clone())
+            .with_brain(Arc::clone(&brain)),
+    );
 
     // Audio capture — held alive in this stack frame
     let (utt_tx, utt_rx) = mpsc::channel::<Utterance>(16);
@@ -335,7 +482,7 @@ async fn run_pipeline(
                     .map(|(q, r, _)| (q, r))
                     .collect();
 
-                let msgs = match ctx.build_prompt(&query, &recent, &chat_history, &system_prompt).await {
+                let msgs = match ctx.build_prompt_with_category(&query, &recent, &chat_history, &system_prompt, Some(&prompt_name)).await {
                     Ok(m) => m,
                     Err(e) => { emit_error(&app, format!("Context: {e}")); continue; }
                 };
@@ -386,6 +533,9 @@ pub fn run() {
     let kb = Arc::new(KnowledgeBase::new(&db).expect("Failed to open KB"));
     let _ = kb.init_schema();
 
+    let brain = Arc::new(BrainStore::new(&db).expect("Failed to open BrainStore"));
+    let _ = brain.init_schema();
+
     let active_prompt = Arc::new(Mutex::new("general".to_string()));
 
     // Create session upfront
@@ -399,12 +549,13 @@ pub fn run() {
 
     // Clones for pipeline thread
     let kb2 = Arc::clone(&kb);
+    let brain2 = Arc::clone(&brain);
     let ss2 = Arc::clone(&session_store);
     let ap2 = Arc::clone(&active_prompt);
     let listening2 = Arc::clone(&listening);
 
     tauri::Builder::default()
-        .manage(AppState { listening, query_tx, kb, session_store, active_prompt, session_id })
+        .manage(AppState { listening, query_tx, kb, brain, session_store, active_prompt, session_id })
         .invoke_handler(tauri::generate_handler![
             toggle_listening,
             send_query,
@@ -415,6 +566,17 @@ pub fn run() {
             list_kb,
             delete_kb_doc,
             ingest_kb_file,
+            list_prompter_notes,
+            add_prompter_note,
+            update_prompter_note,
+            delete_prompter_note,
+            reorder_prompter_notes,
+            list_brain_notes,
+            save_brain_note,
+            delete_brain_note,
+            list_brain_folders,
+            create_brain_folder,
+            delete_brain_folder,
         ])
         .setup(move |app| {
             // Auto-float + hide from screencast on Hyprland (no manual config needed)
@@ -444,7 +606,7 @@ pub fn run() {
                     .enable_all()
                     .build()
                     .expect("tokio runtime");
-                rt.block_on(run_pipeline(handle, query_rx, listening2, kb2, ss2, ap2, session_id));
+                rt.block_on(run_pipeline(handle, query_rx, listening2, kb2, brain2, ss2, ap2, session_id));
             });
             Ok(())
         })

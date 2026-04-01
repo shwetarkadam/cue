@@ -170,3 +170,39 @@ a,
   display: inline-block;
   animation: blink 0.9s ease-in-out infinite;
 }
+
+/* ── Prompter ────────────────────────────────────────────────────────────── */
+.prompter-scroll {
+  scroll-behavior: smooth;
+}
+
+.prompter-card {
+  transition: all 300ms ease;
+}
+.prompter-card:hover {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+}
+.prompter-card.active-card {
+  border-color: var(--accent-border) !important;
+  background: rgba(59, 130, 246, 0.08) !important;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.15), 0 4px 12px -4px rgba(59, 130, 246, 0.2);
+}
+.prompter-card.editing {
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.2);
+}
+
+.prompter-card .btn-icon {
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.prompter-card:hover .btn-icon,
+.prompter-card.active-card .btn-icon {
+  opacity: 1;
+}
+
+/* Textarea for prompter notes */
+textarea.glass-input {
+  height: auto;
+  line-height: 1.6;
+}
