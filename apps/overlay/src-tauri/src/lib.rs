@@ -5,7 +5,7 @@ use std::sync::{
 
 use cue_core::{
     audio::{AudioCapture, Utterance},
-    brain::{BrainStore, BrainNote, BrainFolder, PrompterNote},
+    brain::{BrainStore, BrainNote, PrompterNote},
     config::Config,
     context::ContextEngine,
     kb::KnowledgeBase,
@@ -16,7 +16,8 @@ use cue_core::{
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use tokio::sync::mpsc;
 use tracing::error;
 
@@ -90,6 +91,22 @@ async fn toggle_listening(state: State<'_, AppState>) -> Result<bool, String> {
     let new = !state.listening.load(Ordering::Relaxed);
     state.listening.store(new, Ordering::Relaxed);
     Ok(new)
+}
+
+#[tauri::command]
+async fn toggle_window(app: AppHandle) -> Result<bool, String> {
+    if let Some(win) = app.get_webview_window("main") {
+        if win.is_visible().unwrap_or(true) {
+            win.hide().map_err(|e| e.to_string())?;
+            Ok(false)
+        } else {
+            win.show().map_err(|e| e.to_string())?;
+            win.set_focus().map_err(|e| e.to_string())?;
+            Ok(true)
+        }
+    } else {
+        Err("Window not found".into())
+    }
 }
 
 #[tauri::command]
@@ -558,6 +575,7 @@ pub fn run() {
         .manage(AppState { listening, query_tx, kb, brain, session_store, active_prompt, session_id })
         .invoke_handler(tauri::generate_handler![
             toggle_listening,
+            toggle_window,
             send_query,
             load_history,
             get_prompts,
@@ -600,6 +618,20 @@ pub fn run() {
                 .args(["keyword", "windowrulev2", "noscreencast,class:cue"])
                 .output();
 
+            // Register Ctrl+Shift+H to toggle window visibility
+            let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyH);
+            let toggle_handle = app.handle().clone();
+            app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, _event| {
+                if let Some(win) = toggle_handle.get_webview_window("main") {
+                    if win.is_visible().unwrap_or(true) {
+                        let _ = win.hide();
+                    } else {
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                    }
+                }
+            })?;
+
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Builder::new_current_thread()
@@ -610,6 +642,7 @@ pub fn run() {
             });
             Ok(())
         })
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

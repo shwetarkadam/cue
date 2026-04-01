@@ -87,6 +87,19 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // ── Global keyboard shortcut: Ctrl+Shift+H to hide/show window ────────────
+
+  useEffect(() => {
+    const handler = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "H" && e.ctrlKey && e.shiftKey) {
+        e.preventDefault();
+        invoke("toggle_window").catch(() => {});
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   // ── Auto-scroll conversation ───────────────────────────────────────────────
 
   useEffect(() => {
@@ -877,7 +890,7 @@ windowrulev2 = nofocus, class:cue, title:^$`}
               />
               <span style={{ color: "var(--text-primary)", fontSize: 13, fontWeight: 600, letterSpacing: "0.03em" }}>Prompter</span>
             </div>
-            <div className="no-drag" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <button
                 className={`btn-icon no-drag ${pAutoScroll ? "active" : ""}`}
                 onClick={() => { setPAutoScroll((p) => !p); setPActiveCard(0); }}
@@ -1111,16 +1124,16 @@ windowrulev2 = nofocus, class:cue, title:^$`}
     <div style={{ height: "100vh", width: "100vw", padding: 8, display: "flex", flexDirection: "column" }}>
       <div className="glass" style={{ flex: 1, borderRadius: 18, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
 
-        {/* Title bar */}
+        {/* Title bar — the parent is draggable; only buttons opt out */}
         <div className="drag" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: "1px solid var(--divider)", flexShrink: 0 }}>
-          <div className="no-drag" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, pointerEvents: "none" }}>
             <div
               className={listening ? "dot-listening" : ""}
               style={{ width: 7, height: 7, borderRadius: "50%", background: listening ? "var(--danger)" : "rgba(255,255,255,0.2)", transition: "background 200ms ease", flexShrink: 0 }}
             />
             <span style={{ color: "var(--text-primary)", fontSize: 13, fontWeight: 600, letterSpacing: "0.03em" }}>cue</span>
           </div>
-          <div className="no-drag" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ color: listening ? "var(--danger)" : "var(--text-muted)", fontSize: 11, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", transition: "color 200ms ease" }}>
               {listening ? "listening..." : error ? "error" : status}
             </span>

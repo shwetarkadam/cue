@@ -1,3 +1,7 @@
+#[cfg(target_os = "macos")]
+#[macro_use]
+extern crate objc;
+
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -604,14 +608,16 @@ fn build_window(
     window.present();
 
     #[cfg(target_os = "macos")]
-    hide_from_screen_share();
+    apply_macos_stealth();
 }
 
+/// macOS stealth: hide from screen capture, float above other windows,
+/// exclude from Exposé/Mission Control, and camouflage process name.
 #[cfg(target_os = "macos")]
-fn hide_from_screen_share() {
+fn apply_macos_stealth() {
     use cocoa::appkit::NSApp;
-    use cocoa::base::id;
-    use cocoa::foundation::NSArray;
+    use cocoa::base::{id, nil};
+    use objc::runtime::YES;
 
     unsafe {
         let app: id = NSApp();
@@ -619,38 +625,53 @@ fn hide_from_screen_share() {
             return;
         }
         let windows: id = msg_send![app, windows];
-        if windows.is_null() {
-            return;
-        }
-        let count: usize = NSArray::count(windows);
-        for i in 0..count {
-            let win: id = NSArray::objectAtIndex(windows, i);
-            let _: () = msg_send![win, setSharingType:00i64]; // NSWindowSharingNone = 0
-        }
-    }
-}
-
-}
-
-#[cfg(target_os = "macos")]
-fn hide_from_screen_share() {
-    use cocoa::appkit::NSApp;
-    use cocoa::base::id;
-    use cocoa::foundation::NSArray;
-
-    unsafe {
-        let app: id = NSApp();
-        if app.is_null() {
-            return;
-        }
-        let windows: id = msg_send![app, windows];
-        if windows.is_null() {
+        if windows.is_null() || windows == nil {
             return;
         }
         let count: usize = msg_send![windows, count];
         for i in 0..count {
             let win: id = msg_send![windows, objectAtIndex: i];
-            let _: () = msg_send![win, setSharingType: 0i64]; // NSWindowSharingNone = 0
+            if win.is_null() || win == nil {
+                continue;
+            }
+
+            // NSWindowSharingNone = 0 — hides window from screen recording/sharing
+            let _: () = msg_send![win, setSharingType: 0i64];
+
+            // NSFloatingWindowLevel = 3 — keeps window above normal windows
+            let _: () = msg_send![win, setLevel: 3i64];
+
+            // Collection behavior: exclude from Exposé + Mission Control + Spaces
+            // NSWindowCollectionBehaviorStationary (1 << 4) = 16
+            // NSWindowCollectionBehaviorCanJoinAllSpaces (1 << 0) = 1
+            // NSWindowCollectionBehaviorIgnoresCycle (1 << 6) = 64
+            let behavior: u64 = (1 << 0) | (1 << 4) | (1 << 6);
+            let _: () = msg_send![win, setCollectionBehavior: behavior];
+
+            // Exclude from window list in Dock and Cmd+Tab
+            let _: () = msg_send![win, setExcludedFromWindowsMenu: YES];
+        }
+
+        // Hide from Dock + Cmd+Tab by setting activation policy to Accessory
+        // NSApplicationActivationPolicyAccessory = 1
+        let _: () = msg_send![app, setActivationPolicy: 1i64];
+    }
+
+    // Camouflage process name in Activity Monitor / ps
+    macos_camouflage_process("System Preferences");
+}
+
+/// Overwrite argv[0] to camouflage the process name in `ps` / Activity Monitor.
+#[cfg(target_os = "macos")]
+fn macos_camouflage_process(name: &str) {
+    use std::ffi::CString;
+    if let Ok(cname) = CString::new(name) {
+        unsafe {
+            let args = std::env::args_os().collect::<Vec<_>>();
+            if !args.is_empty() {
+                // pthread_setname_np sets the thread name (visible in Activity Monitor)
+                libc::pthread_setname_np(cname.as_ptr());
+            }
         }
     }
 }
